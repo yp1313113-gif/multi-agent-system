@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile check (所有模块语法)
+        run: |
+          python -m py_compile $(find . -name "*.py" -not -path "./.git/*")
+
+      - name: Run tests (跳过需模型的用例)
+        # CI 无 GPU / 无模型权重，仅跑 AST 安全、数据源列表等轻量用例
+        env:
+          MODEL_TESTS: "0"
+        run: |
+          pytest -q tests/
+
+      - name: Build vector store (可选门控)
+        if: false   # 默认不跑（需模型权重）；本地/自托管 runner 可开启
+        run: python ingest.py

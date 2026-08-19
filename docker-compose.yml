@@ -1,0 +1,32 @@
+services:
+  agent:
+    build: .
+    container_name: multi-agent-system
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      - TEMPERATURE=${TEMPERATURE:-0}
+      - RECURSION_LIMIT=${RECURSION_LIMIT:-10}
+      - TOOL_TIMEOUT=${TOOL_TIMEOUT:-10}
+      - TOOL_MAX_RETRIES=${TOOL_MAX_RETRIES:-3}
+      - TOOL_RETRY_DELAY=${TOOL_RETRY_DELAY:-1}
+      - CACHE_ENABLED=${CACHE_ENABLED:-true}
+      - CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-100}
+      - HITL_ENABLED=${HITL_ENABLED:-true}
+      - HITL_HIGH_RISK_TOOLS=${HITL_HIGH_RISK_TOOLS:-rag_search}
+      - DEFAULT_DATA_SOURCE=${DEFAULT_DATA_SOURCE:-考勤与假期}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_ENDPOINT=https://hf-mirror.com
+    volumes:
+      - ./checkpoints.db:/app/checkpoints.db
+      - ./approval.db:/app/approval.db
+      - ./chroma_db:/app/chroma_db
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./hf_cache:/root/.cache/huggingface   # HuggingFace 模型缓存（避免重复下载）
+    stdin_open: true
+    tty: true
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
