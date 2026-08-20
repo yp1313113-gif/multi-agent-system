@@ -15,6 +15,7 @@ Supervisor-Worker 多 Agent 协作架构（基于 LangGraph StateGraph）
 """
 import aiosqlite
 from typing import Literal
+from loguru import logger
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
@@ -65,7 +66,9 @@ __end__"""
 
 # 当 LLM 不听话、没有输出可识别令牌时的兜底路由表
 _ROUTE_FALLBACKS = [
-    ("math_agent", ["计算", "算", "+", "-", "*", "/", "=", "^", "次方", "平方", "立方", "等于", "多少", "结果"]),
+    # 注意：裸「算」太贪婪（"年假怎么算" 会被误判为数学题），
+    # 只用明确的数学表达短语 + 运算符，避免政策问答被错误路由到 math_agent
+    ("math_agent", ["计算", "算一下", "算一算", "算算", "帮我算", "+", "-", "*", "/", "=", "^", "次方", "平方", "立方", "等于", "多少", "结果"]),
     ("weather_agent", ["天气", "温度", "几度", "下雨", "下雪", "晴天", "阴天", "多云", "风", "气温", "预报"]),
     ("rag_agent", ["工资", "薪酬", "薪资", "年假", "假期", "请假", "病假", "事假", "婚假", "产假", "陪产假", "丧假", "考勤", "迟到", "早退", "加班", "出差", "报销", "社保", "公积金", "五险一金", "制度", "政策", "规定", "流程", "手册", "知识库", "数据源"]),
 ]

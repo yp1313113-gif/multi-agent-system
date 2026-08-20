@@ -103,7 +103,7 @@ multi_agent_system/
 │   ├── retrieval_eval.py   # 纯向量 / BM25 / 混合检索召回率对比
 │   ├── plot_retrieval_eval.py
 │   └── ragas_eval.py
-├── tests/              # pytest 单测（test_tools.py）
+├── tests/              # pytest 单测（test_tools.py + test_supervisor_agents.py）
 ├── .github/workflows/  # CI（push/PR 跑 pytest）
 └── tools/              # 工具集
     ├── rag_tool.py       # 政策检索（混合检索 + 多源过滤 + HITL + 缓存）
