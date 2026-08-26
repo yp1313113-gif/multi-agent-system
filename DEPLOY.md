@@ -16,14 +16,14 @@ pip install -r requirements.txt
 #    a. 让 bge-small-zh-v1.5 走 HF 镜像自动下载（去掉 local_files_only 或联网）；
 #    b. 把 bge-reranker-v2-m3 放到 ./models/bge-reranker-v2-m3/（含 config.json）。
 # 2) 配置 .env（至少 DEEPSEEK_API_KEY）
-cp .env.example .env   # 或自建 .env，填入 DEEPSEEK_API_KEY
+# 自建 .env，填入 DEEPSEEK_API_KEY
 # 3) 构建知识库
 python ingest.py
 # 4) 启动
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
 
-访问：`http://<你的IP>:8000/chat?message=年假有几天`
+访问：`http://<你的IP>:8000/chat?message=研发费用加计扣除比例是多少？`
 
 ---
 
@@ -57,6 +57,5 @@ docker-compose up --build
 
 ## 四、健康检查与验证
 
-- 本地起服务后：`curl "http://localhost:8000/chat?message=年假有几天"`
-- 多源隔离逻辑验证（无需任何模型）：`python verify_multisource.py`
+- 本地起服务后：`curl "http://localhost:8000/chat?message=研发费用加计扣除比例是多少？"`
 - 检索指标复现：`python eval/retrieval_eval.py`

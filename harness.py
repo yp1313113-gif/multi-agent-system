@@ -117,7 +117,7 @@ def guarded_tool(tool, timeout: float = 10, max_retries: int = 2):
     # 优先 tool.copy 保留原 args_schema（langchain 解析 dict → func 参数正确）
     try:
         if hasattr(tool, "copy"):
-            return tool.copy(update={"func": wrapped})
+            return tool.model_copy(update={"func": wrapped})
     except Exception:
         pass
     # 普通函数（测试 stub 等）兜底：重建 StructuredTool

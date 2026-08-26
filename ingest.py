@@ -15,11 +15,15 @@ from pathlib import Path
 
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
-from langchain_community.document_loaders import TextLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+
+try:  # langchain-community 已 sunset，优先用独立包
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_chroma import Chroma
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import Chroma
 
 from config import config
 from tools.data_clean import clean_text
@@ -47,7 +51,7 @@ def main():
     all_docs = []
     for fp in files:
         source = fp.stem  # 文件名（去 .txt）作为逻辑数据源
-        raw = TextLoader(str(fp), encoding='utf-8').load()[0].page_content
+        raw = fp.read_text(encoding='utf-8')
         docs = build_documents(raw, source)
         all_docs.extend(docs)
         print(f"✅ 已加载 [{source}]（{len(raw)} 字符）")

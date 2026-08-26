@@ -14,7 +14,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.vectorstores import Chroma
+try:  # langchain-community 已 sunset，优先用独立包
+    from langchain_chroma import Chroma
+except ImportError:
+    from langchain_community.vectorstores import Chroma
 from rank_bm25 import BM25Okapi
 
 # 中文分词：优先 jieba，未安装时回退到字符级（中文字 + 英文词）
@@ -63,7 +66,10 @@ _embeddings = None
 def get_embeddings():
     global _embeddings
     if _embeddings is None:
-        from langchain_community.embeddings import HuggingFaceEmbeddings
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+        except ImportError:
+            from langchain_community.embeddings import HuggingFaceEmbeddings
         _embeddings = HuggingFaceEmbeddings(
             model_name="BAAI/bge-small-zh-v1.5",
             model_kwargs={"device": "cpu", "local_files_only": True},
