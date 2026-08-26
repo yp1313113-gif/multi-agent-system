@@ -35,6 +35,7 @@ from config import config
 from hitl import has_approved_query, consume_approved_query, request_approval
 import context
 from cache import cache
+from concurrency import single_flight
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(_current_dir)
@@ -343,13 +344,16 @@ def _cacheable(result: str) -> bool:
 
 
 def _cached_rag_query(question, source):
-    if config.CACHE_ENABLED:
-        cache_key = f"{source}:{question}"
-        cached = cache.get(cache_key)
-        if cached:
-            logger.info(f"[{context.get_request_id()}] ✅ 缓存命中")
-            return cached
-        logger.info(f"[{context.get_request_id()}] 📦 缓存未命中")
+    if not config.CACHE_ENABLED:
+        return _execute_rag_query(question, get_retriever(), source)
+    cache_key = f"{source}:{question}"
+    cached = cache.get(cache_key)
+    if cached:
+        logger.info(f"[{context.get_request_id()}] ✅ 缓存命中")
+        return cached
+    logger.info(f"[{context.get_request_id()}] 📦 缓存未命中，进入 single-flight 防击穿")
+
+    def rebuild():
         retriever = get_retriever()
         result = _execute_rag_query(question, retriever, source)
         if _cacheable(result):
@@ -358,17 +362,17 @@ def _cached_rag_query(question, source):
         else:
             logger.info(f"[{context.get_request_id()}] ⏸ 拒答/无来源回答不缓存（缓存准入拦截）")
         return result
-    else:
-        retriever = get_retriever()
-        return _execute_rag_query(question, retriever, source)
+
+    # 防击穿：同一 key 并发 miss 时只重建一次，其余请求等待共享结果
+    return single_flight.run(cache_key, rebuild, lambda: cache.get(cache_key))
 
 print("✅ rag_tool 模块正在被加载...")
 
 @tool
 def query_my_documents(question: str, source: str = None) -> str:
     """
-    查询公司行政管理政策、制度、流程。
-    当用户询问关于年假、考勤、报销、出差等政策时使用此工具。
+    查询研发费用政策、制度、流程。
+    当用户询问关于加计扣除、高企认定、费用口径、辅助账、留存备查等政策时使用此工具。
     """
     print("\n" + "=" * 50)
     print("🔥 query_my_documents 被调用了！")

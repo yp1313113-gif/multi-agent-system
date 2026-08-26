@@ -27,6 +27,7 @@
 | ⚡ Redis 缓存 | 高频问题命中缓存毫秒级返回（`_cacheable` 准入策略：仅带引用来源的答案入缓存）；Redis 不可用时自动降级 |
 | 🛡️ HITL 人工审核 | 敏感词命中（我的/个人/工资/薪资/薪酬）触发审核队列，需 `python hitl.py` 批准后才能查询，审核状态持久化 |
 | ⏱️ Agent Harness | 工具执行统一包装：超时（10s）/ 重试（2 次）/ 日志 / 耗时（guarded_tool 接入全部 Worker 工具） |
+| 🔀 并发控制 | asyncio.Semaphore 限流：并发满排队、超时返回 503 保护下游；single-flight 缓存防击穿：热点 key 并发 miss 只重建一次，其余等待共享结果 |
 | 🔌 MCP 接入 | mcp_server.py 暴露 4 个工具为标准 MCP 工具（stdio），外部 Agent 可协议调用 |
 | 📊 全链路追踪 | Langfuse（可选，未配置自动降级）+ request_id，可视化监控 Token 消耗与响应延迟 |
 | 🐳 容器化部署 | docker-compose 一键启动（FastAPI 服务 + Chroma + Redis） |
@@ -42,6 +43,7 @@
   - **fill_agent**：工时填报——自然语言转工时单，信息不全先确认，不补造数据。
 - **可靠性工程**：Agent Harness（超时/重试/日志） + 死循环双保险 + AST 白名单计算工具（防代码注入）；
 - **生产级素养**：HITL 人工审核、缓存准入、Redis 降级、上下文 token 预算（检索文档截断 4000 字符）、全链路可观测、CI 自动测试。
+- **并发控制（高并发素养）**：API 层 asyncio.Semaphore 限流（并发满排队超时返回 503，保护 LLM API 与数据库）+ single-flight 缓存防击穿（热点问题缓存过期瞬间只重建一次，其余等待共享结果）；/health 进程内压测 **50 并发 QPS≈452、零错误**。
 
 ---
 
@@ -116,6 +118,7 @@ multi-agent-system/
 ├── api.py              # FastAPI 接口（SSE 流式输出，/chat + 聊天前端）
 ├── supervisor.py       # Supervisor-Worker 多 Agent 编排（路由令牌 + 兜底路由 + Harness）
 ├── harness.py          # Agent Harness：guarded_tool / with_timeout / with_retry / AgentLoopGuard
+├── concurrency.py      # 并发控制：AsyncLimiter 限流 + SyncSingleFlight 缓存防击穿
 ├── mcp_server.py       # MCP 服务器：4 个工具暴露为标准 MCP 工具（stdio）
 ├── config.py           # 统一配置管理（多源 DATA_SOURCES / .env 热更新）
 ├── context.py          # 请求 ID 全局上下文
@@ -172,7 +175,7 @@ pytest
 
 ## 测试与评估
 
-- **单元测试**：17 passed 1 skipped（工具数据流、缓存准入、Supervisor 路由回环）
+- **单元测试**：22 passed 1 skipped（工具数据流、缓存准入、Supervisor 路由回环、并发控制限流/防击穿）
 - **检索评估**：eval/retrieval_eval.py 对比纯向量 / BM25 / 混合检索召回率（Recall@3 88%，相对纯向量 72% 提升）
 - **CI**：.github/workflows 在 push/PR 时自动跑 pytest
 

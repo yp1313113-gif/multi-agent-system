@@ -1,9 +1,10 @@
 # api.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 import os
 from agent import stream_chat
+from concurrency import limiter
 
 app = FastAPI()
 
@@ -18,13 +19,23 @@ app.add_middleware(
 @app.get("/chat")
 async def chat(message: str, session: str = "user001"):
     """
-    流式输出接口，使用 StreamingResponse 替代 EventSourceResponse
-    确保兼容性更好
+    流式输出接口（SSE）。并发控制：进入即尝试获取并发名额，
+    满则排队（最长 CONCURRENCY_QUEUE_TIMEOUT 秒），超时返回 503——
+    保护下游 LLM API / 数据库不被瞬时并发打爆。
     """
+    if not await limiter.acquire():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "系统繁忙：当前请求过多，请稍后重试"},
+        )
+
     async def event_generator():
-        async for token in stream_chat(message, session):
-            # 使用标准的 SSE 格式
-            yield f"data: {token}\n\n"
+        try:
+            async for token in stream_chat(message, session):
+                # 使用标准的 SSE 格式
+                yield f"data: {token}\n\n"
+        finally:
+            limiter.release()   # 流结束才释放名额
 
     return StreamingResponse(
         event_generator(),

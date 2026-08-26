@@ -32,6 +32,10 @@ class Config:
         self.TOOL_MAX_RETRIES = int(os.getenv("TOOL_MAX_RETRIES", "3"))
         self.TOOL_RETRY_DELAY = int(os.getenv("TOOL_RETRY_DELAY", "1"))
         
+        # ---- 并发控制 ----
+        self.MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "10"))
+        self.CONCURRENCY_QUEUE_TIMEOUT = float(os.getenv("CONCURRENCY_QUEUE_TIMEOUT", "5"))
+        
         # ---- Redis 缓存 ----
         self.CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
         self.REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
