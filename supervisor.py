@@ -25,6 +25,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from config import config
+from harness import guarded_tool
 from tools.list_sources_tool import list_data_sources
 from tools.rag_tool import query_my_documents
 from tools.expense_tool import classify_expense, list_rd_expenses
@@ -201,7 +202,7 @@ class SupervisorWrapper:
 
         self._agents = {
             "policy_agent": _build_worker(
-                [query_my_documents, list_data_sources],
+                [guarded_tool(query_my_documents), guarded_tool(list_data_sources)],
                 "你是研发费用政策问答 Worker。你的任务：仅针对对话历史中最后一条 user 消息回答，不要理睬历史里尚未回答的问题。"
                 "【强制规则】只要用户问题涉及研发费用加计扣除、六大费用口径、高企认定、申报流程、辅助账、留存备查资料等政策内容，"
                 "你必须调用 query_my_documents 工具检索知识库，绝不能跳过。"
@@ -209,19 +210,19 @@ class SupervisorWrapper:
                 "只基于检索到的上下文作答并引用来源，不编造；知识库没有的就说不知道。",
             ),
             "expense_agent": _build_worker(
-                [classify_expense, list_rd_expenses],
+                [guarded_tool(classify_expense), guarded_tool(list_rd_expenses)],
                 "你是研发费用数据归集 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求把费用归类/归集到 8 类口径时，用 classify_expense 工具（需先确定类别、金额、说明）。"
                 "当用户问「列出研发费用条目」时，用 list_rd_expenses。只返回工具结果，不编造金额。",
             ),
             "risk_agent": _build_worker(
-                [scan_rd_risk, list_risk_indicators],
+                [guarded_tool(scan_rd_risk), guarded_tool(list_risk_indicators)],
                 "你是研发费用风险扫描 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求扫描/检查研发费用风险时，用 scan_rd_risk 工具。"
                 "当用户问「有哪些风险指标」时，用 list_risk_indicators。",
             ),
             "fill_agent": _build_worker(
-                [fill_timesheet],
+                [guarded_tool(fill_timesheet)],
                 "你是研发工时填报 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户描述「某人某天在某项目干了多少小时」时，用 fill_timesheet 工具（需提取：人员、项目、日期、工时、任务）。"
                 "信息不全时先向用户确认缺失字段。",

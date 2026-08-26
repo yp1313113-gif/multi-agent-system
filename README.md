@@ -7,10 +7,18 @@
 
 ---
 
+## 架构定位：Agent Loop + Harness + MCP
+
+- **Agent Loop**：Supervisor-Worker 循环（路由 → Worker 执行 → 回收 → 再路由），LangGraph StateGraph 驱动；防死循环用 recursion_limit + AgentLoopGuard 双保险。
+- **Agent Harness**（harness.py）：工具执行环境与约束层——统一超时 / 有限重试 / 日志 / 耗时统计（guarded_tool 包装所有 Worker 工具），保证"执行可靠、有界、可观测"。
+- **MCP 接入**（mcp_server.py）：把费用归集 / 风险扫描 / 工时填报暴露为标准 MCP 工具（stdio 传输），外部系统或其他 Agent 可通过 MCP 协议调用——"Agent 能力标准化接入"。
+
 ## 功能特性
 
 | 能力 | 实现说明 |
 |------|----------|
+| 🛡️ Agent Harness | 工具执行统一包装：超时 / 重试 / 日志 / 耗时（guarded_tool 接入全部 Worker） |
+| 🔌 MCP 接入 | mcp_server.py 暴露归集/扫描/填报为标准 MCP 工具（stdio），外部系统可协议调用 |
 | 🤖 Agent 编排 | **LangGraph StateGraph 实现的 Supervisor-Worker 多 Agent**：Supervisor 用 LLM 做路由决策，将任务分派给 3 个专职 Worker（政策问答 + 数据源列表 / 天气 / 计算），每个 Worker 是独立 `create_agent`，协作回路由 `Command` 控制 |
 | 💾 多轮对话记忆 | `AsyncSqliteSaver` 持久化 checkpointer，服务重启后对话历史不丢失 |
 | 🔍 RAG 检索增强 | Chroma 向量检索（bge-small-zh-v1.5 embedding）+ `bge-reranker-v2-m3` CrossEncoder 重排，top_n=3 |
