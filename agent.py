@@ -33,7 +33,12 @@ async def _get_wrapper():
 
 
 async def stream_chat(message: str, session: str = "user001"):
-    """流式返回助手回复文本（token 级逐字输出）。"""
+    """流式返回助手回复文本。
+
+    实现：用 ainvoke 获取「最终回答」（与 run.py 一致的可靠取答逻辑），
+    再按小块流式吐出——保证只输出最终答案一次，规避 thinking 模型
+    工具调用前后重复输出预答文本的问题（演示/生产均适用）。
+    """
     wrapper = await _get_wrapper()
     supervisor = wrapper.supervisor
 
@@ -48,18 +53,26 @@ async def stream_chat(message: str, session: str = "user001"):
         "recursion_limit": config.RECURSION_LIMIT,
     }
 
-    async for event in supervisor.astream_events(
+    final_state = await supervisor.ainvoke(
         {"messages": [{"role": "user", "content": message}]},
         config=config_dict,
-        version="v2",
-    ):
-        if event["event"] != "on_chat_model_stream":
-            continue
-        # 排除 Supervisor 路由决策的 token（结构化输出，不进入最终答案）
-        if event["metadata"].get("langgraph_node") == "supervisor":
-            continue
-        # 只取专职 Worker 生成答案的文本内容（跳过工具调用 delta）
-        chunk = event["data"]["chunk"]
-        content = getattr(chunk, "content", "")
-        if isinstance(content, str) and content:
-            yield content
+    )
+    msgs = final_state.get("messages", [])
+    last = msgs[-1] if msgs else None
+    answer = ""
+    if last is not None and getattr(last, "type", "") == "ai":
+        ak = getattr(last, "additional_kwargs", {}) or {}
+        if ak.get("_worker_reply"):
+            txt = getattr(last, "content", "")
+            if isinstance(txt, str) and txt.strip():
+                answer = txt
+            else:
+                answer = ak.get("reasoning_content") or ak.get("content") or ""
+    if not answer:
+        answer = "（抱歉，没有生成有效回答）"
+
+    # 按小块模拟流式输出（每 4 字符 + 20ms），效果等同逐字流式
+    for i in range(0, len(answer), 4):
+        yield answer[i:i + 4]
+        await asyncio.sleep(0.02)
+

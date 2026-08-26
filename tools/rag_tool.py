@@ -81,12 +81,13 @@ def get_llm():
     )
 
 rag_prompt = ChatPromptTemplate.from_template("""
-你是一个企业行政政策问答助手。根据以下公司制度文档回答问题。
+你是一个研发费用政策问答助手。根据以下政策知识库回答问题。
 
 要求：
 - 只基于提供的上下文回答
-- 如果上下文没有相关信息，直接说"未找到相关信息"
-- 回答要简洁、准确
+- 如果上下文没有相关信息，直接说"知识库未收录该政策，建议咨询专业税务顾问，具体以主管税务机关为准"
+- 回答要简洁、准确，引用来源
+- 涉及数字（比例、金额、期限）时严格按上下文，不得编造
 
 <上下文>
 {context}
@@ -95,10 +96,22 @@ rag_prompt = ChatPromptTemplate.from_template("""
 用户问题：{input}
 """)
 
-def format_docs(docs):
+def format_docs(docs, max_chars: int = 4000):
+    """拼装检索上下文，做 token 预算截断（避免超长上下文撑爆窗口）。"""
     if not docs:
         return "无相关上下文"
-    return "\n\n".join(doc.page_content for doc in docs)
+    parts = []
+    total = 0
+    for doc in docs:
+        content = doc.page_content
+        if total + len(content) > max_chars:
+            remain = max_chars - total
+            if remain > 0:
+                parts.append(content[:remain])
+            break
+        parts.append(content)
+        total += len(content)
+    return "\n\n".join(parts)
 
 _rag_chain = None
 
@@ -253,12 +266,50 @@ def get_retriever_for_source(source_name=None):
     desc = config.DATA_SOURCES.get(source_name, {}).get("description", source_name)
     return get_retriever(), desc
 
+# 轻量停用词（相关性门控用，过滤虚词/口语词）
+_STOPWORDS = {"的", "了", "是", "吗", "呢", "啊", "呀", "什么", "怎么", "哪些", "如何", "为什么", "你们", "我们", "请", "帮", "一下", "请问", "给我", "有", "没有"}
+
+
+def _is_relevant(question: str, docs, min_ratio: float = 0.4) -> bool:
+    """grounding 相关性门控：问题核心词在检索片段中的覆盖率低于阈值 → 判为不相关。
+
+    轻量离线版（不依赖 LLM，可测试）；生产版可替换为 LLM 相关性判定。
+    """
+    if not docs:
+        return False
+    tokens = [tk for tk in _tokenize(question) if tk not in _STOPWORDS and len(tk) >= 2]
+    if not tokens:
+        return True
+    blob = " ".join(d.page_content for d in docs)
+    hit = sum(1 for tk in tokens if tk in blob)
+    return hit / len(tokens) >= min_ratio
+
+
+def _rewrite_query(question: str):
+    """CRAG 检索改写：去掉口语前缀/填充词，提取核心检索词（离线规则版，不依赖 LLM）。"""
+    q = question
+    for prefix in ["请问", "帮我", "我想知道", "麻烦问一下", "问一下", "一下", "有没有", "关于", "说一下", "讲讲"]:
+        q = q.replace(prefix, "")
+    q = q.strip().strip("，。？?！!、")
+    return q if q and q != question else None
+
+
 def _execute_rag_query(question, retriever, source=None):
     try:
         docs = retriever.hybrid_search(question, source=source)
+        # CRAG：检索质量自检——结果过少/为空时，改写查询重搜一次（纠正性检索）
+        if len(docs) < 2:
+            rewritten = _rewrite_query(question)
+            if rewritten:
+                logger.info(f"[{context.get_request_id()}] 🔄 CRAG 检索质量低，改写查询重搜: {question!r} -> {rewritten!r}")
+                docs2 = retriever.hybrid_search(rewritten, source=source)
+                if len(docs2) > len(docs):
+                    docs = docs2
+        # grounding 相关性门控：检索片段与问题不相关 → 拒答（不生成幻觉回答）
+        if not docs or not _is_relevant(question, docs):
+            logger.info(f"[{context.get_request_id()}] 🚫 grounding 门控：检索结果与问题不相关，拒答")
+            return "未找到相关信息：知识库未收录该内容。如需政策解读，请咨询专业税务顾问，具体以主管税务机关为准。"
         logger.info(f"[{context.get_request_id()}] 混合检索召回 {len(docs)} 个文档片段（source={source}）")
-        if not docs:
-            return "未找到相关信息，请确认知识库中是否包含该内容。"
         answer = get_rag_chain().invoke({"docs": docs, "question": question})
         sources = []
         for i, doc in enumerate(docs[:2], 1):
@@ -272,6 +323,19 @@ def _execute_rag_query(question, retriever, source=None):
         logger.error(f"RAG 执行失败: {e}")
         return f"❌ 查询失败: {e}"
 
+def _cacheable(result: str) -> bool:
+    """缓存准入：只有「带引用来源的真实回答」才允许缓存。
+
+    防缓存污染：拒答 / 无来源 / 异常 / 门控拒绝的回答绝不入缓存，
+    避免错误答案被反复命中（企业级缓存卫生）。
+    """
+    if not result:
+        return False
+    if result.startswith("❌") or result.startswith("未找到"):
+        return False
+    return "📖" in result or "引用来源" in result
+
+
 def _cached_rag_query(question, source):
     if config.CACHE_ENABLED:
         cache_key = f"{source}:{question}"
@@ -282,8 +346,11 @@ def _cached_rag_query(question, source):
         logger.info(f"[{context.get_request_id()}] 📦 缓存未命中")
         retriever = get_retriever()
         result = _execute_rag_query(question, retriever, source)
-        if result and not result.startswith("❌"):
+        if _cacheable(result):
             cache.set(cache_key, result)
+            logger.info(f"[{context.get_request_id()}] ✅ 回答带引用来源，已写入缓存（准入通过）")
+        else:
+            logger.info(f"[{context.get_request_id()}] ⏸ 拒答/无来源回答不缓存（缓存准入拦截）")
         return result
     else:
         retriever = get_retriever()
@@ -332,14 +399,12 @@ def query_my_documents(question: str, source: str = None) -> str:
 
         # ===== 第二步：判断是否属于政策类问题 =====
         policy_keywords = [
-            "年假", "休假", "请假", "病假", "事假", "婚假", "产假", "陪产假", "丧假",
-            "考勤", "迟到", "早退", "旷工", "加班", "出差", "住宿标准", "餐补",
-            "报销", "社保", "公积金", "培训", "福利", "补贴", "绩效",
-            "制度", "规定", "办法", "流程", "标准", "入职", "离职", "五险一金",
-            "规则", "政策", "手册"
+            "加计扣除", "高企", "高新技术企业", "口径", "费用", "归集", "辅助账",
+            "备查", "申报", "研发活动", "研发人员", "研发费用", "委托研发", "摊销", "折旧",
+            "直接投入", "人员人工", "无形资产", "样品", "政策", "制度", "规定", "流程", "知识库", "数据源"
         ]
         if not any(kw in question for kw in policy_keywords):
-            return "我的知识库主要覆盖公司行政管理政策，您的问题不在这个范围内。"
+            return "我的知识库主要覆盖研发费用政策（加计扣除、六大费用口径、高企认定、申报流程、辅助账、留存备查资料等），您的问题不在这个范围内。如需了解其他事项，请咨询对应部门。"
 
         # ===== 第三步：缓存查询 =====
         if config.CACHE_ENABLED:

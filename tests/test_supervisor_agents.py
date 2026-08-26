@@ -1,6 +1,6 @@
 # tests/test_supervisor_agents.py
 """
-Supervisor-Worker 多 Agent 编排层测试：三 Worker 的 happy path / 拒答 / 跨轮。
+Supervisor-Worker 多 Agent 编排层测试：四 Worker 的 happy path / 拒答 / 跨轮。
 
 背景：真实 LLM 行为（检索质量、工具调用、拒答话术）依赖 API Key 与模型权重，
 在 CI / 离线环境不可复现。因此本模块把「模型层」替换为确定性替身：
@@ -10,7 +10,7 @@ Supervisor-Worker 多 Agent 编排层测试：三 Worker 的 happy path / 拒答
   - FakeWorker  记录收到的消息并返回固定答复，替代 create_agent 构建的专职 Worker。
 
 被测试的是「编排层」自身的确定性逻辑——这正是 README 中
-「pytest 覆盖三 Worker 的 happy path / 拒答 / 跨轮」所指：
+「pytest 覆盖四 Worker 的 happy path / 拒答 / 跨轮」所指：
   1. happy path：三个 Worker 各自领域的问题被正确路由并返回答复；
   2. 拒答      ：范围外/寒暄输入由 Supervisor 直接终止（__end__），不硬答；
                  路由令牌无法识别时走关键词兜底，不抛错、不串台；
@@ -41,9 +41,10 @@ import supervisor  # noqa: E402  (需在 sys.path 设置之后导入)
 
 # 各 Worker 的固定答复（假 Worker 直接返回，不触发真实工具）
 REPLIES = {
-    "rag_agent": "已检索知识库：根据《公司行政管理手册》，年假按工龄计算……",
-    "weather_agent": "北京天气: 晴 24°C（FakeWorker 固定答复）",
-    "math_agent": "2 + 2 = 4",
+    "policy_agent": "已检索知识库：根据《研发费用政策库》，加计扣除比例 100%……",
+    "expense_agent": "已归集：研发服务器电费 → 直接投入费用 ¥3,200。",
+    "risk_agent": "🟢 未发现明显风险，指标均在合规范围内",
+    "fill_agent": "✅ 工时单已生成（FakeWorker 固定答复）",
 }
 
 
@@ -53,11 +54,13 @@ def _worker_name(tools) -> str:
         getattr(t, "name", None) or getattr(t, "__name__", "") for t in tools
     }
     if "query_my_documents" in fnames or "list_data_sources" in fnames:
-        return "rag_agent"
-    if "get_weather" in fnames:
-        return "weather_agent"
-    if "calculate" in fnames:
-        return "math_agent"
+        return "policy_agent"
+    if "classify_expense" in fnames or "list_rd_expenses" in fnames:
+        return "expense_agent"
+    if "scan_rd_risk" in fnames or "list_risk_indicators" in fnames:
+        return "risk_agent"
+    if "fill_timesheet" in fnames:
+        return "fill_agent"
     return "unknown"
 
 
@@ -181,27 +184,27 @@ def _case(fn):
 
 @_case
 async def test_happy_path_rag(env, wrapper):
-    result = await _invoke(wrapper, "公司年假怎么算？", "t-happy-rag")
-    assert REPLIES["rag_agent"] in _final_ai(result)
-    assert env["workers"]["rag_agent"].calls == 1
-    assert env["workers"]["weather_agent"].calls == 0
-    assert env["workers"]["math_agent"].calls == 0
+    result = await _invoke(wrapper, "研发费用加计扣除怎么算？", "t-happy-rag")
+    assert REPLIES["policy_agent"] in _final_ai(result)
+    assert env["workers"]["policy_agent"].calls == 1
+    assert env["workers"]["expense_agent"].calls == 0
+    assert env["workers"]["risk_agent"].calls == 0
 
 
 @_case
 async def test_happy_path_weather(env, wrapper):
-    result = await _invoke(wrapper, "今天北京天气怎么样？", "t-happy-weather")
-    assert REPLIES["weather_agent"] in _final_ai(result)
-    assert env["workers"]["weather_agent"].calls == 1
-    assert env["workers"]["math_agent"].calls == 0
+    result = await _invoke(wrapper, "帮我把研发服务器电费归集到直接投入费用", "t-happy-weather")
+    assert REPLIES["expense_agent"] in _final_ai(result)
+    assert env["workers"]["expense_agent"].calls == 1
+    assert env["workers"]["risk_agent"].calls == 0
 
 
 @_case
 async def test_happy_path_math(env, wrapper):
-    result = await _invoke(wrapper, "帮我计算 2 + 2 等于多少", "t-happy-math")
-    assert REPLIES["math_agent"] in _final_ai(result)
-    assert env["workers"]["math_agent"].calls == 1
-    assert env["workers"]["rag_agent"].calls == 0
+    result = await _invoke(wrapper, "扫描一下研发费用风险：其他相关费用占比 15%", "t-happy-math")
+    assert REPLIES["risk_agent"] in _final_ai(result)
+    assert env["workers"]["risk_agent"].calls == 1
+    assert env["workers"]["policy_agent"].calls == 0
 
 
 # ---------------------------------------------------------------------------
@@ -222,12 +225,12 @@ async def test_refuse_out_of_scope_ends_without_worker(env, wrapper):
 @_case
 async def test_refuse_after_answered_conversation(env, wrapper):
     """先正常问答，再发结束语 → 不再追加 Worker 调用，不硬答。"""
-    await _invoke(wrapper, "帮我计算 2 + 2 等于多少", "t-refuse-2")
-    before = env["workers"]["math_agent"].calls
+    await _invoke(wrapper, "扫描一下研发费用风险：其他相关费用占比 15%", "t-refuse-2")
+    before = env["workers"]["risk_agent"].calls
     assert before == 1
     result = await _invoke(wrapper, "谢谢，没有其他问题了", "t-refuse-2")
     # 第 2 轮只追加了 human 消息，没有新的 AI 答复
-    assert env["workers"]["math_agent"].calls == before
+    assert env["workers"]["risk_agent"].calls == before
     assert len(result["messages"]) == 3  # H1, A1, H2
     assert result["messages"][-1].type == "human"
 
@@ -239,9 +242,9 @@ async def test_router_unrecognized_token_falls_back(env, wrapper):
     # 这里直接覆写 supervisor._make_llm 指向垃圾路由
     import supervisor as _sup
     _sup._make_llm = lambda: GarbageRouter(env)
-    result = await _invoke(wrapper, "今天北京天气怎么样？", "t-refuse-3")
-    assert REPLIES["weather_agent"] in _final_ai(result)
-    assert env["workers"]["weather_agent"].calls == 1
+    result = await _invoke(wrapper, "帮我把研发服务器电费归集到直接投入费用", "t-refuse-3")
+    assert REPLIES["expense_agent"] in _final_ai(result)
+    assert env["workers"]["expense_agent"].calls == 1
 
 
 # ---------------------------------------------------------------------------
@@ -251,13 +254,13 @@ async def test_router_unrecognized_token_falls_back(env, wrapper):
 @_case
 async def test_cross_turn_memory_and_no_bleed(env, wrapper):
     """同一 thread 两轮问答：记忆累计、答案不串台。"""
-    r1 = await _invoke(wrapper, "帮我计算 2 + 2 等于多少", "t-cross-1")
-    assert REPLIES["math_agent"] in _final_ai(r1)
+    r1 = await _invoke(wrapper, "扫描一下研发费用风险：其他相关费用占比 15%", "t-cross-1")
+    assert REPLIES["risk_agent"] in _final_ai(r1)
 
-    r2 = await _invoke(wrapper, "今天北京天气怎么样？", "t-cross-1")
+    r2 = await _invoke(wrapper, "帮我把研发服务器电费归集到直接投入费用", "t-cross-1")
     # 最终答复是天气，不是上一轮的数学答案（无跨轮串扰）
-    assert REPLIES["weather_agent"] in _final_ai(r2)
-    assert REPLIES["math_agent"] not in _final_ai(r2)
+    assert REPLIES["expense_agent"] in _final_ai(r2)
+    assert REPLIES["risk_agent"] not in _final_ai(r2)
     # 记忆按 thread 累计：H1, A1, H2, A2 共 4 条
     assert len(r2["messages"]) == 4
 
@@ -265,12 +268,12 @@ async def test_cross_turn_memory_and_no_bleed(env, wrapper):
 @_case
 async def test_cross_turn_worker_only_sees_last_human(env, wrapper):
     """防串台核心修复：Worker 收到的输入被压缩为「最后一条 human 消息」。"""
-    await _invoke(wrapper, "帮我计算 2 + 2 等于多少", "t-cross-2")
-    await _invoke(wrapper, "今天北京天气怎么样？", "t-cross-2")
-    weather = env["workers"]["weather_agent"]
+    await _invoke(wrapper, "扫描一下研发费用风险：其他相关费用占比 15%", "t-cross-2")
+    await _invoke(wrapper, "帮我把研发服务器电费归集到直接投入费用", "t-cross-2")
+    weather = env["workers"]["expense_agent"]
     # 天气 Worker 被调用时，只收到本轮 human 消息
     assert weather.calls == 1
-    assert weather.received[-1] == [("human", "今天北京天气怎么样？")]
+    assert weather.received[-1] == [("human", "帮我把研发服务器电费归集到直接投入费用")]
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +281,10 @@ async def test_cross_turn_worker_only_sees_last_human(env, wrapper):
 # ---------------------------------------------------------------------------
 
 def test_fallback_route_rules():
-    assert supervisor._fallback_route("帮我计算 1+1 等于几") == "math_agent"
-    assert supervisor._fallback_route("北京今天天气怎么样") == "weather_agent"
-    assert supervisor._fallback_route("年假怎么休？") == "rag_agent"
+    assert supervisor._fallback_route("扫描一下研发费用风险") == "risk_agent"
+    assert supervisor._fallback_route("把电费归集到直接投入费用") == "expense_agent"
+    assert supervisor._fallback_route("研发费用加计扣除怎么算") == "policy_agent"
+    assert supervisor._fallback_route("帮王建国填报今天在恒泰项目的6小时工时") == "fill_agent"
     assert supervisor._fallback_route("你好") == "__end__"
     assert supervisor._fallback_route("") == "__end__"
     assert supervisor._fallback_route("随便聊聊") == "__end__"

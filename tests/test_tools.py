@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.math_tool import calculate
 from tools.list_sources_tool import list_data_sources
 from tools.data_clean import clean_text
-from tools.doc_parser import parse_chapters, split_sections, chapter_to_source
+from tools.doc_parser import parse_chapters, split_sections, chapter_to_source  # noqa: F401（doc_parser 保留供扩展）
 from config import config
 
 # 切块用轻量依赖；若环境未安装则跳过（不阻塞核心逻辑测试）
@@ -69,61 +69,57 @@ def test_list_data_sources_has_three_sources():
 # 3. 数据管线：清洗 → 切章/小节 → 多源映射 → 切块元数据继承
 #    （轻量、无需模型/向量库，CI 可直接跑）
 # ---------------------------------------------------------------------------
-MANUAL_PATH = os.path.join(
+# 改造后：逻辑数据源 = 文件名（ingest.py 多文件逻辑），研发费用 3 个数据文件
+DATA_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "data", "公司行政管理手册.txt",
+    "data",
 )
-
-# 章号 -> 期望逻辑源
-_EXPECT_SRC = {"通用制度": [1, 6, 7, 8], "考勤与假期": [2, 3], "薪酬与福利": [4, 5]}
+_EXPECT_SOURCES = ["研发费用政策库", "研发费用归集FAQ", "研发费用风险指标库"]
 
 
 def test_clean_preserves_headings():
-    raw = open(MANUAL_PATH, encoding="utf-8").read()
-    cleaned = clean_text(raw)
-    # 清洗不应破坏章节/小节标题结构
-    assert len(parse_chapters(cleaned)) == 8
-    assert len(split_sections(cleaned)) >= 8  # 至少含小节
+    """研发费用数据文件存在且清洗后保留 ## 结构标题。"""
+    for name in _EXPECT_SOURCES:
+        fp = os.path.join(DATA_DIR, name + ".txt")
+        raw = open(fp, encoding="utf-8").read()
+        cleaned = clean_text(raw)
+        assert len(cleaned) > 0
+        assert "# " in cleaned, f"{name} 清洗后应保留标题结构"
 
 
-def test_chapter_to_source_mapping():
-    raw = open(MANUAL_PATH, encoding="utf-8").read()
-    cleaned = clean_text(raw)
-    got = {src: [] for src in _EXPECT_SRC}
-    for num, _ in parse_chapters(cleaned):
-        got[chapter_to_source(num)].append(num)
-    for src, chs in _EXPECT_SRC.items():
-        assert sorted(got[src]) == chs, f"{src} 章号映射错误: {got[src]}"
+def test_source_mapping_by_filename():
+    """改造后：逻辑数据源 = 文件名，3 个研发费用源都在 config.DATA_SOURCES 中注册。"""
+    import config as _cfg
+    for name in _EXPECT_SOURCES:
+        assert name in _cfg.config.DATA_SOURCES, f"缺少数据源: {name}"
+        assert os.path.exists(os.path.join(DATA_DIR, name + ".txt"))
+    assert len(_cfg.config.DATA_SOURCES) == 3
 
 
 def test_chunk_metadata_inheritance():
+    """新 ingest 逻辑：每文件一个 source，递归切块后元数据 source 继承（多源隔离）。"""
     if not _HAVE_SPLITTER:
         import pytest
         pytest.skip("未安装 langchain-text-splitters")
-    raw = open(MANUAL_PATH, encoding="utf-8").read()
-    cleaned = clean_text(raw)
-    docs = []
-    for num, body in parse_chapters(cleaned):
-        src = chapter_to_source(num)
-        for sec_title, sec_body in split_sections(body):
-            meta = {"source": src, "chapter": num}
-            if sec_title:
-                meta["section"] = sec_title
-            docs.append(Document(page_content=sec_body, metadata=meta))
+    from tools.data_clean import clean_text
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800, chunk_overlap=150,
-        separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
+        chunk_size=500, chunk_overlap=80,
+        separators=["\n## ", "\n### ", "\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
         keep_separator=True,
     )
-    chunks = splitter.split_documents(docs)
-    assert len(chunks) > 0
-    # 每个切片都必须继承 source + chapter，且 source 与章号一致（多源隔离）
-    for i, c in enumerate(chunks):
-        c.metadata["chunk_index"] = i
-        assert c.metadata["source"] in _EXPECT_SRC
-        assert c.metadata["chapter"] in _EXPECT_SRC[c.metadata["source"]]
-    # 三个源都应出现
-    assert {c.metadata["source"] for c in chunks} == set(_EXPECT_SRC)
+    all_chunks = []
+    for name in _EXPECT_SOURCES:
+        fp = os.path.join(DATA_DIR, name + ".txt")
+        raw = open(fp, encoding="utf-8").read()
+        cleaned = clean_text(raw)
+        doc = Document(page_content=cleaned, metadata={"source": name})
+        chunks = splitter.split_documents([doc])
+        for c in chunks:
+            assert c.metadata["source"] == name
+        all_chunks.extend(chunks)
+    assert len(all_chunks) > 0
+    assert {c.metadata["source"] for c in all_chunks} == set(_EXPECT_SOURCES)
+
 
 
 # ---------------------------------------------------------------------------
@@ -149,13 +145,13 @@ def test_hybrid_source_filter():
 
     from tools.rag_tool import get_retriever
     retriever = get_retriever()
-    docs = retriever.hybrid_search("年假有几天", source="考勤与假期", top_k=3)
+    docs = retriever.hybrid_search("研发费用加计扣除怎么算", source="研发费用政策库", top_k=3)
     assert len(docs) > 0
     for d in docs:
-        assert d.metadata.get("source") == "考勤与假期"
+        assert d.metadata.get("source") == "研发费用政策库"
 
     # 切换到另一个源应得到不同（不重叠）的上下文
-    docs2 = retriever.hybrid_search("工资什么时候发", source="薪酬与福利", top_k=3)
+    docs2 = retriever.hybrid_search("其他相关费用上限是多少", source="研发费用政策库", top_k=3)
     assert len(docs2) > 0
     for d in docs2:
-        assert d.metadata.get("source") == "薪酬与福利"
+        assert d.metadata.get("source") == "研发费用政策库"

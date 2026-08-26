@@ -12,3 +12,7 @@ approval.db
 compare_retrieval_full.py
 test_langfuse.py
 test_retrieval.py
+
+checkpoints.db*
+*.db-shm
+*.db-wal

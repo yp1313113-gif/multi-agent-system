@@ -1,7 +1,8 @@
 # api.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
+import os
 from agent import stream_chat
 
 app = FastAPI()
@@ -36,6 +37,16 @@ async def chat(message: str, session: str = "user001"):
     )
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
+    """聊天前端页面（访问 / 即对话界面）。"""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "chat.html"), encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return {"status": "ok", "message": "AI Agent is running"}
+
+
+@app.get("/health")
+async def health():
     return {"status": "ok", "message": "AI Agent is running"}

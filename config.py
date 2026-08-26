@@ -55,22 +55,19 @@ class Config:
         # "切换知识库" = 查询时按 source 做元数据过滤（where={"source": x}）。
         # chapters 字段用于 ingest 阶段按章节把手册切分到对应数据源。
         self.DATA_SOURCES = {
-            "考勤与假期": {
-                "description": "考勤与假期制度（工作时间、迟到早退、加班、年假/病假/事假/婚假/产假/陪产/丧假）",
-                "chapters": [2, 3],
+            "研发费用政策库": {
+                "description": "研发费用加计扣除政策（100%加计、六大费用口径、高企认定条件、不适用情形）",
             },
-            "薪酬与福利": {
-                "description": "薪酬福利与出差报销（薪酬结构、工资发放、五险一金、补贴、出差申请/差旅标准/报销流程）",
-                "chapters": [4, 5],
+            "研发费用归集FAQ": {
+                "description": "研发费用归集常见问答（研发活动判断、辅助账、留存备查资料、申报时间）",
             },
-            "通用制度": {
-                "description": "公司通用制度（总则、培训发展、行为规范、附则）",
-                "chapters": [1, 6, 7, 8],
+            "研发费用风险指标库": {
+                "description": "金四对标风险指标（人员/直接投入/折旧/其他/综合）",
             },
         }
-        self.DEFAULT_DATA_SOURCE = os.getenv("DEFAULT_DATA_SOURCE", "考勤与假期")
+        self.DEFAULT_DATA_SOURCE = os.getenv("DEFAULT_DATA_SOURCE", "研发费用政策库")
         # 共享集合名（ingest 与检索两端必须一致）
-        self.COLLECTION_NAME = os.getenv("COLLECTION_NAME", "company_handbook")
+        self.COLLECTION_NAME = os.getenv("COLLECTION_NAME", "rd_expense")
         
         self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     

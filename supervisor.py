@@ -27,27 +27,31 @@ from langgraph.types import Command
 from config import config
 from tools.list_sources_tool import list_data_sources
 from tools.rag_tool import query_my_documents
-from tools.weather_tool import get_weather
-from tools.math_tool import calculate
+from tools.expense_tool import classify_expense, list_rd_expenses
+from tools.risk_scan_tool import scan_rd_risk, list_risk_indicators
+from tools.fill_timesheet_tool import fill_timesheet
 
 
 # 专职 Worker 节点名
-WORKER_NAMES = ["rag_agent", "weather_agent", "math_agent"]
+WORKER_NAMES = ["policy_agent", "expense_agent", "risk_agent", "fill_agent"]
 
 # 路由令牌（Supervisor 只输出其中之一，避免依赖结构化输出 / response_format，
 # 因为 deepseek-chat 等模型不支持 response_format 参数）
-ROUTE_TOKENS = ["rag_agent", "weather_agent", "math_agent", "__end__"]
+ROUTE_TOKENS = ["policy_agent", "expense_agent", "risk_agent", "fill_agent", "__end__"]
 
 
 ROUTER_SYSTEM = """你是一个多 Agent 协作系统的 Supervisor（调度中枢）。
 你的唯一职责：根据用户最新的消息，判断应该由哪个专职 Worker 处理，或判断已经可以结束。
 
 可用 Worker：
-- rag_agent：企业行政管理政策/制度问答（年假、报销、考勤、出差、社保、公积金、工资/薪酬制度等），
-  也负责「列出有哪些知识库/数据源」这类问题（它会调用 list_data_sources 工具）。
-  注意：员工个人工资/薪酬查询（如"我的工资是多少"）也属于 rag_agent 范围，它会触发人工审核流程。
-- weather_agent：查询任意城市的实时天气
-- math_agent：数学计算（支持 + - * / 以及括号、幂运算）
+- policy_agent：研发费用政策问答（加计扣除 100%、六大费用口径、高企认定条件、申报流程、辅助账、留存备查资料等），
+  也负责「列出有哪些知识库/数据源」这类问题（它会调用 query_my_documents / list_data_sources 工具）。
+  重要：若用户的问题既不属于 expense_agent / risk_agent / fill_agent，也不是结束语/寒暄，
+  一律路由给 policy_agent——它会查询知识库，知识库没有的内容会明确告知"未收录"，不会编造。
+- expense_agent：研发费用数据归集（把费用条目归类到 8 类费用口径：人员人工/直接投入/折旧/无形资产摊销/新产品设计费/装配调试/其他相关费用/委托研发），
+  也负责「列出当前研发费用条目」。
+- risk_agent：研发费用风险扫描（对标金四指标，输出绿/黄/红预警），也负责「列出风险指标」。
+- fill_agent：研发工时填报（把自然语言描述转成工时单）。
 
 决策规则：
 1. 只依据「最新一条 user 消息」选择 Worker，不要管更早的历史。
@@ -57,20 +61,20 @@ ROUTER_SYSTEM = """你是一个多 Agent 协作系统的 Supervisor（调度中�
 3. 一次只路由给「一个」Worker。
 4. 如果某个问题可以由多个 Worker 处理，选择最匹配的那个。
 
-【输出格式要求】你只能回复以下四个令牌中的【唯一一个】，不要输出任何解释、标点或多余文字：
-rag_agent
-weather_agent
-math_agent
+【输出格式要求】你只能回复以下五个令牌中的【唯一一个】，不要输出任何解释、标点或多余文字：
+policy_agent
+expense_agent
+risk_agent
+fill_agent
 __end__"""
 
 
 # 当 LLM 不听话、没有输出可识别令牌时的兜底路由表
 _ROUTE_FALLBACKS = [
-    # 注意：裸「算」太贪婪（"年假怎么算" 会被误判为数学题），
-    # 只用明确的数学表达短语 + 运算符，避免政策问答被错误路由到 math_agent
-    ("math_agent", ["计算", "算一下", "算一算", "算算", "帮我算", "+", "-", "*", "/", "=", "^", "次方", "平方", "立方", "等于", "多少", "结果"]),
-    ("weather_agent", ["天气", "温度", "几度", "下雨", "下雪", "晴天", "阴天", "多云", "风", "气温", "预报"]),
-    ("rag_agent", ["工资", "薪酬", "薪资", "年假", "假期", "请假", "病假", "事假", "婚假", "产假", "陪产假", "丧假", "考勤", "迟到", "早退", "加班", "出差", "报销", "社保", "公积金", "五险一金", "制度", "政策", "规定", "流程", "手册", "知识库", "数据源"]),
+    ("fill_agent", ["填报", "工时", "填写", "记录工时", "报工时"]),
+    ("risk_agent", ["风险", "扫描", "预警", "指标", "对标", "金四"]),
+    ("expense_agent", ["归集", "费用归类", "归类", "8类费用", "费用条目", "直接投入", "折旧", "摊销", "委托研发"]),
+    ("policy_agent", ["加计扣除", "高企", "高新技术企业", "口径", "政策", "制度", "辅助账", "备查", "申报", "研发活动", "研发人员", "工资", "薪酬", "知识库", "数据源"]),
 ]
 
 
@@ -115,7 +119,7 @@ def _build_worker(tools, system_prompt: str):
 
 
 async def _supervisor(state: MessagesState) -> Command[
-    Literal["rag_agent", "weather_agent", "math_agent", "__end__"]
+    Literal["policy_agent", "expense_agent", "risk_agent", "fill_agent", "__end__"]
 ]:
     # 判断是否为「Worker 回答之后的二次路由」：
     # - 若最后一条消息是带 _worker_reply 标记的 AIMessage，说明本回合已由 Worker
@@ -196,26 +200,31 @@ class SupervisorWrapper:
         print(f"  · 专职 Worker（{len(WORKER_NAMES)} 个）: {WORKER_NAMES}")
 
         self._agents = {
-            "rag_agent": _build_worker(
+            "policy_agent": _build_worker(
                 [query_my_documents, list_data_sources],
-                "你是企业行政管理政策/制度问答 Worker，同时也负责回答「有哪些知识库/数据源」。"
-                "你的任务：仅针对对话历史中最后一条 user 消息进行回答，不要理睬历史里任何尚未回答的其他问题，也不要在回答中主动提及它们。"
-                "【强制规则】只要用户问题涉及公司制度、政策、工资、薪酬、年假、报销、考勤、社保、公积金等内容，"
-                "你必须调用 query_my_documents 工具检索知识库，绝不能因为历史对话中曾出现过类似问题或审核提示而跳过工具调用。"
-                "当用户问「有哪些知识库/你能查什么」时，请使用 list_data_sources 工具列出可用数据源。"
-                "只基于检索到的上下文作答，简洁准确，不要编造。",
+                "你是研发费用政策问答 Worker。你的任务：仅针对对话历史中最后一条 user 消息回答，不要理睬历史里尚未回答的问题。"
+                "【强制规则】只要用户问题涉及研发费用加计扣除、六大费用口径、高企认定、申报流程、辅助账、留存备查资料等政策内容，"
+                "你必须调用 query_my_documents 工具检索知识库，绝不能跳过。"
+                "当用户问「有哪些知识库/你能查什么」时，用 list_data_sources 工具。"
+                "只基于检索到的上下文作答并引用来源，不编造；知识库没有的就说不知道。",
             ),
-            "weather_agent": _build_worker(
-                [get_weather],
-                "你是天气查询 Worker。"
-                "你的任务：仅针对对话历史中最后一条 user 消息进行回答，不要理睬历史里任何尚未回答的其他问题，也不要在回答中主动提及它们。"
-                "当用户询问某个城市的天气时，请使用 get_weather 工具查询并回答。",
+            "expense_agent": _build_worker(
+                [classify_expense, list_rd_expenses],
+                "你是研发费用数据归集 Worker。任务：仅针对最后一条 user 消息回答。"
+                "当用户要求把费用归类/归集到 8 类口径时，用 classify_expense 工具（需先确定类别、金额、说明）。"
+                "当用户问「列出研发费用条目」时，用 list_rd_expenses。只返回工具结果，不编造金额。",
             ),
-            "math_agent": _build_worker(
-                [calculate],
-                "你是数学计算 Worker。"
-                "你的任务：仅针对对话历史中最后一条 user 消息进行回答，不要理睬历史里任何尚未回答的其他问题，也不要在回答中主动提及它们。"
-                "当用户提出数学运算需求时，请使用 calculate 工具计算并给出结果。",
+            "risk_agent": _build_worker(
+                [scan_rd_risk, list_risk_indicators],
+                "你是研发费用风险扫描 Worker。任务：仅针对最后一条 user 消息回答。"
+                "当用户要求扫描/检查研发费用风险时，用 scan_rd_risk 工具。"
+                "当用户问「有哪些风险指标」时，用 list_risk_indicators。",
+            ),
+            "fill_agent": _build_worker(
+                [fill_timesheet],
+                "你是研发工时填报 Worker。任务：仅针对最后一条 user 消息回答。"
+                "当用户描述「某人某天在某项目干了多少小时」时，用 fill_timesheet 工具（需提取：人员、项目、日期、工时、任务）。"
+                "信息不全时先向用户确认缺失字段。",
             ),
         }
 
