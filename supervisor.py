@@ -25,6 +25,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from config import config
+import context
 from harness import guarded_tool
 from tools.list_sources_tool import list_data_sources
 from tools.rag_tool import query_my_documents
@@ -113,6 +114,24 @@ def _make_llm():
         )
 
 
+def _tools_for(worker: str, fallback: list) -> list:
+    """优先从技能库装配该 Worker 的工具；技能库异常时回退到硬编码列表。
+
+    回退不是多余：技能库的价值是"可插拔"，但如果一个技能包写错就让整个服务起不来，
+    这个抽象就是负收益。所以降级路径必须有，而且要告警（不静默）。
+    """
+    try:
+        from skills.registry import tools_for_worker
+        pairs = tools_for_worker(worker)          # [(Skill, guarded_tool), ...]
+        if pairs:
+            logger.info(f"[skills] {worker} 装配 {len(pairs)} 个技能: {[s.name for s, _ in pairs]}")
+            return [t for _, t in pairs]
+        logger.warning(f"[skills] {worker} 未匹配到任何技能，回退硬编码工具列表")
+    except Exception as e:
+        logger.warning(f"[skills] 技能库装配失败（回退硬编码）: {e}")
+    return [guarded_tool(t) for t in fallback]
+
+
 def _build_worker(tools, system_prompt: str):
     """构建一个专职 Worker（create_agent）。
     不自带 checkpointer：对话记忆由外层 StateGraph 统一通过 AsyncSqliteSaver 管理。"""
@@ -167,6 +186,16 @@ def _make_worker_node(agent, name: str):
             if getattr(m, "type", "") == "human":
                 last_human = m
                 break
+        # 长期记忆注入：把「关于该用户的事实」作为前缀拼进本轮用户消息。
+        # 注意只注入到 Worker，不注入 Supervisor —— 路由只依据用户原话，
+        # 记忆里的词（如"偏好"/"项目"）会干扰令牌匹配，把路由带偏。
+        memory = context.get_memory_prompt()
+        if last_human is not None and memory:
+            from langchain_core.messages import HumanMessage
+            last_human = HumanMessage(
+                content=f"{memory}\n\n{getattr(last_human, 'content', '')}"
+            )
+            logger.info(f"[memory] 已向 {name} 注入长期记忆（{len(memory)} 字符）")
         filtered_state = {"messages": [last_human]} if last_human else state
         result = await agent.ainvoke(filtered_state)
         # 取 Worker 的最终回答（最后一条消息）
@@ -202,7 +231,7 @@ class SupervisorWrapper:
 
         self._agents = {
             "policy_agent": _build_worker(
-                [guarded_tool(query_my_documents), guarded_tool(list_data_sources)],
+                _tools_for("policy_agent", [query_my_documents, list_data_sources]),
                 "你是研发费用政策问答 Worker。你的任务：仅针对对话历史中最后一条 user 消息回答，不要理睬历史里尚未回答的问题。"
                 "【强制规则】只要用户问题涉及研发费用加计扣除、六大费用口径、高企认定、申报流程、辅助账、留存备查资料等政策内容，"
                 "你必须调用 query_my_documents 工具检索知识库，绝不能跳过。"
@@ -210,19 +239,19 @@ class SupervisorWrapper:
                 "只基于检索到的上下文作答并引用来源，不编造；知识库没有的就说不知道。",
             ),
             "expense_agent": _build_worker(
-                [guarded_tool(classify_expense), guarded_tool(list_rd_expenses)],
+                _tools_for("expense_agent", [classify_expense, list_rd_expenses]),
                 "你是研发费用数据归集 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求把费用归类/归集到 8 类口径时，用 classify_expense 工具（需先确定类别、金额、说明）。"
                 "当用户问「列出研发费用条目」时，用 list_rd_expenses。只返回工具结果，不编造金额。",
             ),
             "risk_agent": _build_worker(
-                [guarded_tool(scan_rd_risk), guarded_tool(list_risk_indicators)],
+                _tools_for("risk_agent", [scan_rd_risk, list_risk_indicators]),
                 "你是研发费用风险扫描 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求扫描/检查研发费用风险时，用 scan_rd_risk 工具。"
                 "当用户问「有哪些风险指标」时，用 list_risk_indicators。",
             ),
             "fill_agent": _build_worker(
-                [guarded_tool(fill_timesheet)],
+                _tools_for("fill_agent", [fill_timesheet]),
                 "你是研发工时填报 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户描述「某人某天在某项目干了多少小时」时，用 fill_timesheet 工具（需提取：人员、项目、日期、工时、任务）。"
                 "信息不全时先向用户确认缺失字段。",

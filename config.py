@@ -38,12 +38,23 @@ class Config:
         
         # ---- Redis 缓存 ----
         self.CACHE_ENABLED = os.getenv("CACHE_ENABLED", "true").lower() == "true"
+        # 进程内 LRU 兜底缓存的容量（Redis 不可用时自动降级使用）
+        self.CACHE_MAX_SIZE = int(os.getenv("CACHE_MAX_SIZE", "100"))
         self.REDIS_ENABLED = os.getenv("REDIS_ENABLED", "true").lower() == "true"
         self.REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
         self.REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
         self.REDIS_DB = int(os.getenv("REDIS_DB", "0"))
         self.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
         self.REDIS_CACHE_TTL = int(os.getenv("REDIS_CACHE_TTL", "3600"))
+        
+        # ---- 服务预热（启动时预加载模型，避免首个请求承担冷启动成本）----
+        self.WARMUP_ENABLED = os.getenv("WARMUP_ENABLED", "true").lower() == "true"
+        
+        # ---- Token 成本（元 / 百万 token；未配置则只统计 token 不算钱）----
+        self.PRICE_INPUT_PER_M = float(os.getenv("PRICE_INPUT_PER_M", "0"))
+        self.PRICE_OUTPUT_PER_M = float(os.getenv("PRICE_OUTPUT_PER_M", "0"))
+        # 单会话费用告警阈值（元）；<=0 表示不告警
+        self.COST_ALERT_PER_SESSION = float(os.getenv("COST_ALERT_PER_SESSION", "0"))
         
         # ---- Langfuse 可观测性 ----
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")

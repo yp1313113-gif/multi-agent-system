@@ -4,6 +4,8 @@
 > 回答可靠（grounding 防幻觉 + 引用来源）、过程可控（敏感查询人工审核 HITL）、能力可标准化接入（MCP）。
 >
 > 📖 [技术选型理由（面试速查版）](./docs/tech_rationale.md) ｜ 📋 [需求规格说明书](./docs/需求规格说明书_研发费用智能管理系统.md)
+>
+> 🗓️ 开发周期 2026.04 — 2026.08：4-7 月完成核心功能开发与迭代（早期在本地维护），8 月完成需求自洽整改（补需求规格/清理旧知识库/依赖迁移）与并发控制后统一开源上线。
 
 ---
 
@@ -44,6 +46,12 @@
 - **可靠性工程**：Agent Harness（超时/重试/日志） + 死循环双保险 + AST 白名单计算工具（防代码注入）；
 - **生产级素养**：HITL 人工审核、缓存准入、Redis 降级、上下文 token 预算（检索文档截断 4000 字符）、全链路可观测、CI 自动测试。
 - **并发控制（高并发素养）**：API 层 asyncio.Semaphore 限流（并发满排队超时返回 503，保护 LLM API 与数据库）+ single-flight 缓存防击穿（热点问题缓存过期瞬间只重建一次，其余等待共享结果）；/health 进程内压测 **50 并发 QPS≈452、零错误**。
+- **真 token 级流式**：`astream_events(v2)` 按 `langgraph_node` 只转发 Worker 的最终回答 token；工具调用轮的前缀缓冲整段丢弃（避免 thinking 模型把"预答文本"推给用户造成重复输出）；流式异常时回读 checkpointer 兜底，保证**一定有回答**。实测热态首字延迟 4.9s、生成阶段 1.0s（数百个 token 块）。
+- **两级缓存（优雅降级）**：Redis + 进程内 LRU。Redis 未部署/抖动时自动降级，缓存能力不归零 —— 不是"要么全有要么全无"；`/health` 直接暴露当前生效的缓存后端，降级状态一眼可见。
+- **服务预热（消灭首个请求的冷启动）**：启动时预加载向量模型 / 交叉编码器重排模型 / BM25 索引 / 编排图。实测**首个请求 26.6s → 8.2s**（预热本身耗时 17.9s，只在部署时付一次，不再由第一个用户买单）。预热是尽力而为的：任何一步失败只告警、不阻断启动。
+- **长期记忆 + 准入判断**：按 session 记住「偏好 / 身份 / 常用项目」，写库前做三重准入（白名单 key、拒绝问句与时效性表述、长度上限）防**记忆污染**；只注入 Worker、不注入 Supervisor（记忆里的词会干扰路由令牌匹配）。
+- **技能库（Skill Registry）**：`skills/<name>/SKILL.md` 声明式能力单元（名称 / 版本 / 说明 / 何时使用 / 归属 Worker / 自带评测用例），启动扫描 → 动态加载 → 按归属自动装配到对应 Worker。新增能力 = 新增一个目录，**主流程零改动**；单个技能包写坏只跳过并告警，不影响服务启动。
+- **Token 成本埋点**：按「会话 / 节点」记账，能看出钱花在 Supervisor 路由还是某个 Worker；支持单会话费用阈值告警（为降级策略留接口）。
 
 ---
 
@@ -121,18 +129,23 @@ multi-agent-system/
 ├── concurrency.py      # 并发控制：AsyncLimiter 限流 + SyncSingleFlight 缓存防击穿
 ├── mcp_server.py       # MCP 服务器：4 个工具暴露为标准 MCP 工具（stdio）
 ├── config.py           # 统一配置管理（多源 DATA_SOURCES / .env 热更新）
-├── context.py          # 请求 ID 全局上下文
+├── context.py          # 请求级上下文（contextvars，并发隔离；request_id + 记忆提示块）
+├── memory_store.py     # 长期记忆：三重准入判断 + SQLite 持久化 + LLM 事实抽取
+├── cost_tracker.py     # Token 成本埋点：按会话/节点记账 + 预算告警
+├── skills/             # 技能库：声明式能力单元（新增能力只加目录，主流程零改动）
+│   ├── registry.py     #   扫描 SKILL.md → 解析元数据 → 动态加载 handler → 按 Worker 装配
+│   └── <skill>/SKILL.md#   每个技能：名称/版本/说明/何时使用/归属 Worker/评测用例
 ├── exceptions.py       # 自定义异常分类
 ├── hitl.py             # 人工审核模块（Human-in-the-loop，SQLite 持久化）
-├── cache.py            # Redis 缓存（带降级）
+├── cache.py            # 两级缓存：Redis + 进程内 LRU（Redis 不可用时自动降级）
 ├── ingest.py           # 知识库构建（多文件 + 结构切分 + 向量化 + 入库）
 ├── docker-compose.yml  # Docker 部署编排
 ├── Dockerfile          # 镜像构建
 ├── requirements.txt    # 依赖清单
 ├── data/               # 知识库文档（研发费用政策库 / 归集FAQ / 风险指标库）
 ├── docs/               # 项目文档与图表（tech_rationale.md 面试速查版）
-├── eval/               # 评测脚本（混合检索召回率对比 + ragas）
-├── tests/              # pytest 单测（test_tools.py + test_supervisor_agents.py）
+├── eval/               # 评测脚本（检索召回率对比 + ragas + 流式性能基准 + 端到端验证）
+├── tests/              # pytest 单测（工具 / 编排 / 并发 / 长期记忆 / 技能库 / 成本埋点）
 ├── .github/workflows/  # CI（push/PR 跑 pytest）
 └── tools/              # 工具集
     ├── rag_tool.py       # 政策检索（混合检索 + grounding 门控 + CRAG + HITL + 缓存准入）
@@ -159,8 +172,9 @@ pip install -r requirements.txt
 # 3. 构建知识库（data/ 下 txt → Chroma）
 python ingest.py
 
-# 4. 启动服务
+# 4. 启动服务（启动时会预热模型，约 18s；可用 WARMUP_ENABLED=false 关闭）
 python api.py          # http://127.0.0.1:8001 聊天前端
+# 生产部署：uvicorn api:app --host 0.0.0.0 --port 8000
 # 或 CLI 交互
 python run.py
 
@@ -175,7 +189,10 @@ pytest
 
 ## 测试与评估
 
-- **单元测试**：22 passed 1 skipped（工具数据流、缓存准入、Supervisor 路由回环、并发控制限流/防击穿）
+- **单元测试**：79 passed 1 skipped（工具数据流、缓存准入、Supervisor 路由回环、并发控制限流/防击穿、长期记忆准入判断、技能库装配与容错、成本记账与解析）
+- **流式性能基准**：`python eval/stream_bench.py` —— 实测冷启动 TTFT 26.6s / 热态 4.9s，生成阶段 ~1.0s（数百个 token 块证明是真流式而非分块补发）
+- **端到端验证**：`python eval/verify_all.py` —— 一轮说身份偏好 → 落长期记忆 → 下轮 Worker 收到记忆注入 → 全程 token 自动记账
+- **服务实测**：`python api.py` 启动 → 预热 17.9s → 首个请求 8.2s、热态 5.0s（含 `✅ 缓存命中`）；`/health` 返回预热耗时与缓存后端
 - **检索评估**：eval/retrieval_eval.py 对比纯向量 / BM25 / 混合检索召回率（Recall@3 88%，相对纯向量 72% 提升）
 - **CI**：.github/workflows 在 push/PR 时自动跑 pytest
 
@@ -188,3 +205,9 @@ pytest
 3. **怎么保证可靠？** Agent Harness：统一超时/重试/日志/耗时，防死循环双保险；
 4. **怎么对外开放能力？** MCP 标准协议，外部系统可协议调用；
 5. **生产级素养**：HITL 审核、缓存准入、降级、token 预算、可观测、CI。
+6. **流式怎么做才是真的？** `astream_events` 按节点过滤 + 工具调用轮缓冲丢弃；不是 `ainvoke` 之后再分块假装流式；
+7. **记忆怎么防止污染？** 写库前三重准入（白名单 key / 拒绝问句与时效性表述 / 长度上限）——宁可少写，不可写错；
+8. **怎么让能力可插拔？** 技能库把「工具 + 提示词 + 评测」打包成带版本的目录，声明式装配，主流程零改动；
+9. **成本怎么控？** 按节点记账找出钱花在哪（Supervisor 路由 vs Worker），再谈优化；本项目的确定性路由本身就是省成本设计；
+10. **冷启动怎么优化？** 模型加载/索引构建这类一次性成本从"首个用户请求"挪到"服务启动"——首个请求 26.6s → 8.2s；
+11. **请求上下文怎么隔离？** 用 `contextvars` 而不是模块级全局变量：10 并发下全局变量会让 A 请求的日志打上 B 的 request_id，线程池还要显式 `copy_context()` 才能把上下文带进工具线程。

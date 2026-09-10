@@ -10,6 +10,7 @@ Harness 保证"工具执行可靠、有界、可观测"——这是 Agent 上生
 """
 import time
 import concurrent.futures
+import contextvars
 from functools import wraps
 
 from loguru import logger
@@ -24,8 +25,12 @@ def with_timeout(seconds: float = 10):
             if args and isinstance(args[0], dict):
                 kwargs = {**args[0], **kwargs}
                 args = ()
+            # 关键：线程池不会自动继承 contextvars 上下文，
+            # 必须显式 copy_context() 传进去，否则工具线程里读到的 request_id 是默认值，
+            # 日志无法与请求关联（排查问题时等于丢了链路）。
+            ctx = contextvars.copy_context()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(fn, *args, **kwargs)
+                fut = ex.submit(ctx.run, fn, *args, **kwargs)
                 return fut.result(timeout=seconds)
 
         return wrapper

@@ -19,9 +19,14 @@ pip install -r requirements.txt
 # 自建 .env，填入 DEEPSEEK_API_KEY
 # 3) 构建知识库
 python ingest.py
-# 4) 启动
+# 4) 启动（启动时会预热模型，约 18s；预热进度见日志）
 uvicorn api:app --host 0.0.0.0 --port 8000
 ```
+
+> **关于启动耗时**：服务启动时会主动预热（加载向量模型 / 重排模型 / BM25 索引 / 编排图），
+> 因此启动比普通 API 慢约 18 秒。这是**故意的**——这笔一次性成本如果留给运行时，
+> 就会变成"第一个用户请求慢 26 秒"。预热结果可在 `/health` 查看；
+> 不想要就设 `WARMUP_ENABLED=false`。
 
 访问：`http://<你的IP>:8000/chat?message=研发费用加计扣除比例是多少？`
 

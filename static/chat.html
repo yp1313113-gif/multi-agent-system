@@ -3,40 +3,57 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>研发费用智能助手</title>
+<title>研发费用智能管理平台 · AI 助手</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:#f0f2f5;height:100vh;display:flex;flex-direction:column}
-  header{background:#0f2d5e;color:#fff;padding:14px 24px;display:flex;align-items:center;gap:12px}
-  header .logo{width:36px;height:36px;border-radius:8px;background:linear-gradient(135deg,#1677ff,#722ed1);display:flex;align-items:center;justify-content:center;font-size:18px}
-  header h1{font-size:16px}
-  header .sub{font-size:11px;opacity:.7}
-  #msgs{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:12px}
-  .m{max-width:72%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
-  .u{align-self:flex-end;background:#1677ff;color:#fff;border-bottom-right-radius:3px}
-  .b{align-self:flex-start;background:#fff;border:1px solid #e5e6eb;border-bottom-left-radius:3px}
+  body{font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:linear-gradient(180deg,#eef3fb 0%,#f7f8fa 100%);height:100vh;display:flex;flex-direction:column}
+  header{background:linear-gradient(135deg,#0f2d5e 0%,#1677ff 100%);color:#fff;padding:16px 26px;display:flex;align-items:center;gap:14px;box-shadow:0 2px 12px rgba(15,45,94,.25)}
+  header .logo{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px;backdrop-filter:blur(4px)}
+  header h1{font-size:18px;font-weight:600;letter-spacing:.5px}
+  header .sub{font-size:11px;opacity:.85;margin-top:2px}
+  .badge{display:inline-block;background:rgba(255,255,255,.2);border-radius:10px;padding:1px 8px;font-size:10px;margin-left:6px}
+  #msgs{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:12px}
+  .welcome{align-self:center;background:#fff;border:1px solid #e5e6eb;border-radius:16px;padding:18px 22px;max-width:88%;box-shadow:0 2px 8px rgba(0,0,0,.05);font-size:13.5px;color:#1f2329;line-height:1.9}
+  .welcome b{color:#1677ff}
+  .m{max-width:78%;padding:11px 16px;border-radius:14px;font-size:14px;line-height:1.75;word-break:break-word}
+  .u{align-self:flex-end;background:linear-gradient(135deg,#1677ff,#3c9bff);color:#fff;border-bottom-right-radius:4px;box-shadow:0 2px 6px rgba(22,119,255,.3)}
+  .b{align-self:flex-start;background:#fff;border:1px solid #e8eaee;border-bottom-left-radius:4px;box-shadow:0 1px 4px rgba(0,0,0,.04)}
   .typing::after{content:"▍";animation:blink 1s infinite}
   @keyframes blink{50%{opacity:0}}
-  .chips{display:flex;gap:8px;padding:8px 24px;flex-wrap:wrap}
-  .qc{background:#e6f4ff;color:#1677ff;border-radius:14px;padding:6px 14px;font-size:12px;cursor:pointer;border:1px solid #91caff}
-  .qc:hover{background:#bae0ff}
-  footer{display:flex;gap:10px;padding:12px 24px 18px;border-top:1px solid #e5e6eb;background:#fff}
-  input{flex:1;border:1px solid #d9d9d9;border-radius:8px;padding:10px 14px;font-size:14px;outline:none}
-  input:focus{border-color:#1677ff}
-  button{background:#1677ff;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer}
-  button:disabled{opacity:.5}
-  .src{font-size:11px;color:#86909c;margin-top:6px}
+  .src{background:#f0f5ff;border-left:3px solid #1677ff;border-radius:0 6px 6px 0;padding:3px 10px;font-size:11.5px;color:#1677ff;margin-top:6px}
+  .r-danger{color:#cf1322;font-weight:600}
+  .r-warn{color:#d46b08;font-weight:600}
+  .r-safe{color:#389e0d;font-weight:600}
+  .r-ok{color:#389e0d}
+  .chips-wrap{background:transparent;padding:4px 26px 10px;display:flex;flex-direction:column;gap:8px}
+  .chips-label{font-size:11px;color:#86909c;letter-spacing:1px}
+  .chip-group{display:flex;flex-wrap:wrap;gap:8px}
+  .qc{background:#fff;color:#1677ff;border:1px solid #b7d5ff;border-radius:14px;padding:5px 13px;font-size:12px;cursor:pointer;transition:all .15s;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .qc:hover{background:#1677ff;color:#fff;transform:translateY(-1px)}
+  footer{display:flex;gap:10px;padding:10px 26px 16px;border-top:1px solid #e8eaee;background:rgba(255,255,255,.92)}
+  input{flex:1;border:1px solid #d9d9d9;border-radius:22px;padding:10px 18px;font-size:14px;outline:none;background:#fafbfc}
+  input:focus{border-color:#1677ff;background:#fff;box-shadow:0 0 0 3px rgba(22,119,255,.12)}
+  button{background:linear-gradient(135deg,#1677ff,#3c9bff);color:#fff;border:none;border-radius:22px;padding:10px 24px;font-size:14px;cursor:pointer;font-weight:600}
+  button:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
 <header>
-  <div class="logo">🤖</div>
-  <div><h1>研发费用智能助手</h1><div class="sub">多 Agent 平台 · 政策问答 / 费用归集 / 风险扫描 / 工时填报 · SSE 流式</div></div>
+  <div class="logo">🧾</div>
+  <div>
+    <h1>研发费用智能管理平台<span class="badge">多 Agent 演示</span></h1>
+    <div class="sub">政策问答 · 费用归集 · 税务风险扫描 · 工时填报</div>
+  </div>
 </header>
 <div id="msgs">
-  <div class="m b">你好！我是研发费用智能助手 👋<br>可以问我：<br>· "研发费用加计扣除比例是多少？"<br>· "高新技术企业认定条件有哪些？"<br>· "帮我把研发服务器电费归集到直接投入费用"<br>· "扫描研发费用风险：其他相关费用占比 15%"<br>· "帮王建国填报今天在恒泰项目的6小时工时"</div>
+  <div class="welcome"><b>您好！我是研发费用智能助手</b> 🤖<br>
+  帮研发型企业管好 <b>加计扣除</b>：回答政策、归类费用、预警税务风险、填报工时。<br>
+  <span style="color:#86909c;font-size:12px">试试点下面的示例问题，或直接输入你的问题 👇</span></div>
 </div>
-<div class="chips" id="chips"></div>
+<div class="chips-wrap">
+  <div class="chips-label">💡 示例问题（点击即问）</div>
+  <div class="chip-group" id="chips"></div>
+</div>
 <footer>
   <input id="inp" placeholder="输入问题，回车发送…" autocomplete="off">
   <button id="btn">发送</button>
@@ -48,15 +65,39 @@ var msgs = document.getElementById('msgs');
 var inp = document.getElementById('inp');
 var btn = document.getElementById('btn');
 
-var quick = ['研发费用加计扣除比例是多少？','高新技术企业认定条件有哪些？','帮我把研发服务器电费归集到直接投入费用','扫描研发费用风险：其他相关费用占比 15%','帮王建国填报今天在恒泰项目的6小时工时'];
-var chipsEl = document.getElementById('chips');
-chipsEl.innerHTML = quick.map(function(q){ return '<span class="qc">' + q + '</span>'; }).join('');
-chipsEl.addEventListener('click', function(e){ if(e.target.classList.contains('qc')){ inp.value = e.target.textContent; send(); } });
+var quick = [
+  '研发费用加计扣除比例是多少？',
+  '高新技术企业认定条件有哪些？',
+  '扫描研发费用风险：其他相关费用占比 12%',
+  '研发人员占比 4%，会被税务局查吗？',
+  '帮我把研发服务器电费归集到直接投入费用',
+  '帮王建国填报今天在恒泰项目的 6 小时工时'
+];
+document.getElementById('chips').innerHTML = quick.map(function(q){ return '<span class="qc">' + q + '</span>'; }).join('');
+document.getElementById('chips').addEventListener('click', function(e){ if(e.target.classList.contains('qc')){ inp.value = e.target.textContent; send(); } });
+
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderBot(text){
+  // 行级美化：引用来源 / 风险色标 / 成功提示
+  var out = '';
+  var lines = esc(text).split('\n');
+  lines.forEach(function(line, i){
+    var l = line.trim();
+    if(/^📖/.test(l)){ out += '<div class="src">' + line + '</div>'; }
+    else if(/^🔴/.test(l)){ out += '<div class="r-danger">' + line + '</div>'; }
+    else if(/^🟡/.test(l)){ out += '<div class="r-warn">' + line + '</div>'; }
+    else if(/^🟢/.test(l)){ out += '<div class="r-safe">' + line + '</div>'; }
+    else if(/^✅/.test(l)){ out += '<div class="r-ok">' + line + '</div>'; }
+    else { out += (i > 0 ? '<br>' : '') + line; }
+  });
+  return out;
+}
 
 function addMsg(cls, text){
   var d = document.createElement('div');
   d.className = 'm ' + cls;
-  d.textContent = text;
+  d.innerHTML = text;
   msgs.appendChild(d);
   msgs.scrollTop = msgs.scrollHeight;
   return d;
@@ -65,14 +106,13 @@ async function send(){
   var q = inp.value.trim();
   if(!q) return;
   inp.value = '';
-  addMsg('u', q);
-  var bot = addMsg('b', '');
-  bot.classList.add('typing');
+  addMsg('u', esc(q));
+  var bot = addMsg('b', '<span class="typing"></span>');
   btn.disabled = true;
   var buf = '';
   try{
     var resp = await fetch('/chat?message=' + encodeURIComponent(q) + '&session=' + encodeURIComponent(sid));
-    if(!resp.ok || !resp.body){ bot.textContent = '请求失败: ' + resp.status; return; }
+    if(!resp.ok || !resp.body){ bot.innerHTML = '请求失败: ' + resp.status; return; }
     var reader = resp.body.getReader();
     var dec = new TextDecoder();
     var text = '';
@@ -84,14 +124,13 @@ async function send(){
       while((idx = buf.indexOf('\n\n')) >= 0){
         var evt = buf.slice(0, idx); buf = buf.slice(idx+2);
         var m = evt.match(/^data: (.*)$/m);
-        if(m){ text += m[1]; bot.textContent = text; msgs.scrollTop = msgs.scrollHeight; }
+        if(m){ text += m[1]; bot.innerHTML = renderBot(text); msgs.scrollTop = msgs.scrollHeight; }
       }
     }
-    if(!text){ bot.textContent = '（没有生成回答）'; }
+    if(!text){ bot.innerHTML = '（没有生成回答）'; }
   }catch(err){
-    bot.textContent = '连接失败：' + err.message;
+    bot.innerHTML = '连接失败：' + esc(err.message);
   }
-  bot.classList.remove('typing');
   btn.disabled = false;
 }
 btn.addEventListener('click', send);

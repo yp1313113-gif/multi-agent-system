@@ -1,12 +1,31 @@
 # api.py
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 import os
 from agent import stream_chat
 from concurrency import limiter
+from warmup import warmup_all
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app):
+    """服务启动/关闭钩子。
+
+    启动时做**预热**：把向量模型、重排模型、BM25 索引、编排图的构建
+    从「首个用户请求」挪到「服务启动」。实测冷启动 TTFT 26.6s → 热态 4.9s，
+    差的这 20 秒不该由第一个用户买单。
+
+    warmup_all 是尽力而为的：任何一步失败只告警，不会阻断服务启动。
+    """
+    report = await warmup_all()
+    app.state.warmup_report = report
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,4 +79,51 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "message": "AI Agent is running"}
+    """健康检查：附带缓存后端与预热结果，便于运维一眼看出降级状态。"""
+    from cache import cache
+    return {
+        "status": "ok",
+        "message": "AI Agent is running",
+        "cache_backend": cache.backend,      # redis / local-lru（降级可见）
+        "warmup": getattr(app.state, "warmup_report", None),
+    }
+
+
+@app.get("/skills")
+async def skills():
+    """能力清单：系统当前具备哪些技能。
+
+    直接从技能库元数据生成，不手工维护 —— 代码和文档不会对不上。
+    """
+    try:
+        from skills.registry import list_skills
+        items = list_skills()
+        return {"count": len(items), "skills": items}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"技能库读取失败: {e}"})
+
+
+@app.get("/cost")
+async def cost(session: str = None):
+    """成本观测：token 用量与费用（按会话或全局）。
+
+    面试演示点：Agent 一次请求会触发多次 LLM 调用（路由/决策/总结/记忆抽取），
+    没有埋点就看不出钱花在哪个节点上。
+    """
+    try:
+        from cost_tracker import session_summary, global_summary
+        if session:
+            return session_summary(session)
+        return global_summary()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"成本读取失败: {e}"})
+
+
+if __name__ == "__main__":
+    # 本地启动入口。此前 api.py 缺少这一段，README 写的 `python api.py` 实际
+    # 只会导入模块然后退出（服务器根本没起来）——部署文档里用的是 uvicorn api:app。
+    import uvicorn
+
+    port = int(os.getenv("PORT", "8001"))
+    print(f"🚀 启动研发费用 Agent 服务： http://127.0.0.1:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
