@@ -48,4 +48,11 @@ def _clean_checkpoints_db():
                 break
             except PermissionError:
                 time.sleep(0.2)
+        else:
+            # 静默失败会变成"断言数字莫名其妙变大"的假故障，排查成本极高。
+            # 这里必须显式报错：多半是还有进程（如性能基准脚本）占着这个库。
+            raise RuntimeError(
+                f"无法删除残留的 {candidate}（被占用）。"
+                "请先结束占用该文件的 Python 进程（例如 eval/stream_bench.py 的基准运行）再执行测试。"
+            )
     yield
