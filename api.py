@@ -51,8 +51,12 @@ async def chat(message: str, session: str = "user001"):
     async def event_generator():
         try:
             async for token in stream_chat(message, session):
-                # 使用标准的 SSE 格式
-                yield f"data: {token}\n\n"
+                # SSE 的 data 行不能直接携带换行：前端按 "\n\n" 分帧，
+                # 一个裸 \n token 会变成空帧被直接吞掉 —— 结果是模型的分点列表
+                # 全部挤成一行（实测踩到的 bug）。
+                # 所以必须转义：反斜杠 → \\，换行 → \n，前端再做反转义。
+                safe = token.replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n")
+                yield f"data: {safe}\n\n"
         finally:
             limiter.release()   # 流结束才释放名额
 

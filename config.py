@@ -28,8 +28,10 @@ class Config:
         self.RECURSION_LIMIT = int(os.getenv("RECURSION_LIMIT", "10"))
         
         # ---- 工具 ----
-        self.TOOL_TIMEOUT = int(os.getenv("TOOL_TIMEOUT", "10"))
-        self.TOOL_MAX_RETRIES = int(os.getenv("TOOL_MAX_RETRIES", "3"))
+        # RAG 工具内部包含一次 LLM 生成，端到端常需十几秒；默认 30s 避免误杀正常调用。
+        # （超时本身是真的会生效的 —— 见 harness.with_timeout 里关于 ThreadPoolExecutor 的注释）
+        self.TOOL_TIMEOUT = int(os.getenv("TOOL_TIMEOUT", "30"))
+        self.TOOL_MAX_RETRIES = int(os.getenv("TOOL_MAX_RETRIES", "2"))
         self.TOOL_RETRY_DELAY = int(os.getenv("TOOL_RETRY_DELAY", "1"))
         
         # ---- 并发控制 ----

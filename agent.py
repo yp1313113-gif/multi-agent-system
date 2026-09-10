@@ -38,6 +38,13 @@ import cost_tracker
 # 单个模型轮次在放行前先缓冲的字符数（用于甄别"调工具轮"与"最终回答轮"）
 STREAM_GRACE_CHARS = 16
 
+# 流式重置信号。
+# 场景：某一轮模型输出（如"好的，我来查一下…"）已经推给用户了，随后才发现它其实是
+# 「决定调工具」的前言轮。此时必须通知前端丢弃已显示内容，否则用户会先看到前言、
+# 等工具跑完再看到完整答案，观感上就是"重复输出"。
+# 实测踩坑：前言可能很长（38 字符），远超缓冲阈值，光靠缓冲阈值拦不住。
+STREAM_RESET = "__DSH_STREAM_RESET__"
+
 # 全局复用的 SupervisorWrapper（首次请求时惰性初始化）
 _wrapper = None
 _init_lock = asyncio.Lock()
@@ -84,16 +91,47 @@ def _chunk_has_tool_call(chunk) -> bool:
     return bool(getattr(chunk, "tool_calls", None))
 
 
+def _has_tool_calls(message) -> bool:
+    """该模型轮次的最终输出是否包含工具调用。
+
+    用于在 on_chat_model_end 处判定「这一轮是去调工具的」——即它的文字内容只是前言
+    （如"好的，我来查一下…"），不该作为最终答案展示给用户。
+    """
+    if message is None:
+        return False
+    if getattr(message, "tool_calls", None):
+        return True
+    return bool(getattr(message, "tool_call_chunks", None))
+
+
 def _node_of(event) -> str:
-    """判断事件属于哪个 Worker 节点；非 Worker（例如 supervisor）返回空串。"""
+    """判断这条模型调用是不是「某个 Worker 产出的最终回答」；是则返回 Worker 名，否则返回空串。
+
+    实测：一次真实请求会出现四类模型调用（按 checkpoint_ns 区分）：
+
+      supervisor | supervisor:xxx                   → 路由决策，不该给用户看
+      model      | policy_agent:xxx|model:yyy       → Worker 决定调工具（内容只是前言）
+      tools      | policy_agent:xxx|tools:yyy       → ⚠️ 工具内部又调了一次 LLM 生成答案
+      model      | policy_agent:xxx|model:zzz       → Worker 的最终回答 ✓
+
+    第三类最容易漏：RAG 工具内部自己会调一次模型生成答案，它在 create_agent 的
+    "tools" 节点里执行。如果不过滤，用户会先看到一遍"扁平版答案"（工具产出），
+    再看到 Worker 的结构化答案 —— 观感上就是整段重复。
+    """
     md = event.get("metadata") or {}
     node = md.get("langgraph_node")
+    ns = md.get("langgraph_checkpoint_ns") or ""
+    segments = [seg.split(":")[0] for seg in ns.split("|") if seg]
+
+    # 工具节点内部的模型调用 → 不是最终回答，一律过滤
+    if node == "tools" or "tools" in segments:
+        return ""
+
     if isinstance(node, str) and node in WORKER_NAMES:
         return node
-    ns = md.get("langgraph_checkpoint_ns") or ""
-    for name in WORKER_NAMES:
-        if ns.startswith(name + ":") or ("|" + name + ":") in ns:
-            return name
+    # create_agent 子图内部会退化成 "model"，用 checkpoint_ns 最外层还原 Worker 名
+    if segments and segments[0] in WORKER_NAMES:
+        return segments[0]
     return ""
 
 
@@ -154,10 +192,10 @@ async def stream_chat(message: str, session: str = "user001"):
     answer_parts: list = []          # 累积完整答案，用于结束后做长期记忆抽取
 
     # 每个模型轮次独立判定：缓冲中 / 已放行 / 已判定为"调工具轮"（丢弃）
-    buffering = True
     live = False
     discarded = False
     buffer: list = []
+    streamed_runs: set = set()        # 已经推送过内容的模型轮次 run_id
 
     try:
         async for event in supervisor.astream_events(
@@ -166,6 +204,7 @@ async def stream_chat(message: str, session: str = "user001"):
             version="v2",
         ):
             etype = event.get("event")
+            run_id = event.get("run_id")
 
             # 成本埋点：所有 LLM 调用都要记账（含 Supervisor 的路由调用），
             # 因此这一步必须放在「节点过滤」之前 —— 否则路由开销不可见。
@@ -195,28 +234,47 @@ async def stream_chat(message: str, session: str = "user001"):
                 if live:
                     emitted_chars += len(text)
                     answer_parts.append(text)
+                    if run_id is not None:
+                        streamed_runs.add(run_id)
                     yield text
                 else:
                     buffer.append(text)
                     if sum(len(x) for x in buffer) >= STREAM_GRACE_CHARS:
-                        # 确认为最终回答轮：放行缓冲，转入真正逐 token 流式
+                        # 缓冲够了先放行、转入真流式；若这一轮随后出现工具调用，
+                        # 会在 on_chat_model_end 处发重置信号把它收回去
                         head = "".join(buffer)
                         buffer.clear()
                         live = True
                         emitted_chars += len(head)
                         answer_parts.append(head)
+                        if run_id is not None:
+                            streamed_runs.add(run_id)
                         yield head
 
-            else:  # on_chat_model_end：一轮模型输出结束，复位判定状态
-                if not discarded and not live and buffer:
-                    # 该轮没有工具调用也没凑满缓冲阈值 → 直接放行（无工具的直接回答）
+            else:  # on_chat_model_end：一轮模型输出结束
+                output = (event.get("data") or {}).get("output")
+
+                if _has_tool_calls(output):
+                    # 这一轮其实是「决定调工具」的前言轮
+                    if run_id is not None and run_id in streamed_runs:
+                        logger.info("[stream] 工具调用轮的内容已推送 → 发出前端重置信号")
+                        yield STREAM_RESET
+                        answer_parts.clear()
+                        emitted_chars = 0
+                    else:
+                        buffer.clear()
+                elif not live and buffer:
+                    # 该轮没有工具调用、也没凑满缓冲阈值 → 放行（无工具的直接回答）
                     head = "".join(buffer)
                     buffer.clear()
                     live = True
                     emitted_chars += len(head)
                     answer_parts.append(head)
+                    if run_id is not None:
+                        streamed_runs.add(run_id)
                     yield head
-                buffering, live, discarded, buffer = True, False, False, []
+
+                live, discarded, buffer = False, False, []
 
     except Exception as e:
         # 流式链路异常不吞掉：记录后走兜底，保证用户一定能拿到回答

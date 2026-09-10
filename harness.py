@@ -29,9 +29,18 @@ def with_timeout(seconds: float = 10):
             # 必须显式 copy_context() 传进去，否则工具线程里读到的 request_id 是默认值，
             # 日志无法与请求关联（排查问题时等于丢了链路）。
             ctx = contextvars.copy_context()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+
+            # ⚠️ 这里绝不能写成 with ThreadPoolExecutor(...) as ex:
+            #    with 块退出时会调用 shutdown(wait=True)，即「等到任务真正跑完」，
+            #    于是 fut.result(timeout=N) 抛出的超时异常也要等任务结束才抛得出来 ——
+            #    超时形同虚设（实测：6 秒任务设 2 秒超时，异常在 6.01 秒才出现）。
+            # 正确做法：手动 shutdown(wait=False)，让调用方在 N 秒时立刻拿到 TimeoutError。
+            ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            try:
                 fut = ex.submit(ctx.run, fn, *args, **kwargs)
                 return fut.result(timeout=seconds)
+            finally:
+                ex.shutdown(wait=False)
 
         return wrapper
 
@@ -88,11 +97,26 @@ class AgentLoopGuard:
         return True
 
 
-def guarded_tool(tool, timeout: float = 10, max_retries: int = 2):
+def guarded_tool(tool, timeout: float = None, max_retries: int = None):
     """把 LangChain 工具包装为 Harness 受控工具：超时 + 重试 + 日志 + 耗时。
+
+    超时/重试默认读 config.TOOL_TIMEOUT / TOOL_MAX_RETRIES（未配置则 10s / 2 次）。
+    ⚠️ 超时必须「真的超时」—— 详见 with_timeout 里关于 ThreadPoolExecutor 的注释。
 
     保持 LangChain Tool 接口（name/description），可无缝接入 create_agent。
     """
+    # 超时/重试从配置读取，便于按环境调整：
+    # RAG 工具内部包含一次 LLM 生成，端到端常需十几秒，10 秒上限会误杀正常调用。
+    try:
+        from config import config
+        if timeout is None:
+            timeout = float(config.TOOL_TIMEOUT)
+        if max_retries is None:
+            max_retries = int(config.TOOL_MAX_RETRIES)
+    except Exception:
+        timeout = 10 if timeout is None else timeout
+        max_retries = 2 if max_retries is None else max_retries
+
     try:
         from langchain_core.tools import StructuredTool
     except ImportError:

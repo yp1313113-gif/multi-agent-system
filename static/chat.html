@@ -35,6 +35,15 @@
   input:focus{border-color:#1677ff;background:#fff;box-shadow:0 0 0 3px rgba(22,119,255,.12)}
   button{background:linear-gradient(135deg,#1677ff,#3c9bff);color:#fff;border:none;border-radius:22px;padding:10px 24px;font-size:14px;cursor:pointer;font-weight:600}
   button:disabled{opacity:.5;cursor:not-allowed}
+  /* 回答里的 markdown 渲染（模型常输出表格/加粗/列表，不渲染会显示成原始符号） */
+  .m table.md{width:100%;border-collapse:collapse;margin:8px 0;font-size:13px}
+  .m table.md th{background:#eef3fb;color:#0f2d5e;text-align:left;padding:6px 9px;border:1px solid #dbe4f0;font-weight:600}
+  .m table.md td{padding:6px 9px;border:1px solid #dbe4f0;vertical-align:top}
+  .m .li{position:relative;padding-left:15px;margin:3px 0}
+  .m .li::before{content:'•';position:absolute;left:2px;color:#1677ff;font-weight:700}
+  .m .h{font-weight:700;color:#0f2d5e;margin:7px 0 2px}
+  .m code{background:#f2f5fa;padding:1px 4px;border-radius:3px;font-family:Consolas,monospace;font-size:12px;color:#b3005e}
+  .m b{color:#14213d}
 </style>
 </head>
 <body>
@@ -78,19 +87,52 @@ document.getElementById('chips').addEventListener('click', function(e){ if(e.tar
 
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+// 行内 markdown：加粗 + 行内代码
+function inline(s){
+  return s.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+// markdown 表格 → 真表格（模型输出比例对照表时经常用到）
+function renderTable(rows){
+  var cells = rows.map(function(r){
+    return r.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function(c){ return c.trim(); });
+  }).filter(function(c){
+    return !c.every(function(x){ return /^:?-{2,}:?$/.test(x); });   // 丢掉 |---|---| 分隔行
+  });
+  if(!cells.length) return '';
+  var h = '<table class="md"><tr>';
+  cells[0].forEach(function(c){ h += '<th>' + inline(c) + '</th>'; });
+  h += '</tr>';
+  cells.slice(1).forEach(function(r){
+    h += '<tr>';
+    r.forEach(function(c){ h += '<td>' + inline(c) + '</td>'; });
+    h += '</tr>';
+  });
+  return h + '</table>';
+}
 function renderBot(text){
-  // 行级美化：引用来源 / 风险色标 / 成功提示
+  // 行级渲染：引用来源 / 风险色标 / 表格 / 列表 / 标题 / 加粗
   var out = '';
   var lines = esc(text).split('\n');
-  lines.forEach(function(line, i){
-    var l = line.trim();
-    if(/^📖/.test(l)){ out += '<div class="src">' + line + '</div>'; }
-    else if(/^🔴/.test(l)){ out += '<div class="r-danger">' + line + '</div>'; }
-    else if(/^🟡/.test(l)){ out += '<div class="r-warn">' + line + '</div>'; }
-    else if(/^🟢/.test(l)){ out += '<div class="r-safe">' + line + '</div>'; }
-    else if(/^✅/.test(l)){ out += '<div class="r-ok">' + line + '</div>'; }
-    else { out += (i > 0 ? '<br>' : '') + line; }
-  });
+  var i = 0;
+  while(i < lines.length){
+    var l = lines[i].trim();
+    if(/^\|/.test(l)){                                  // 连续 | 开头 → 一张表格
+      var rows = [];
+      while(i < lines.length && /^\|/.test(lines[i].trim())){ rows.push(lines[i].trim()); i++; }
+      out += renderTable(rows);
+      continue;
+    }
+    if(/^📖/.test(l)){ out += '<div class="src">' + inline(l) + '</div>'; }
+    else if(/^🔴/.test(l)){ out += '<div class="r-danger">' + inline(l) + '</div>'; }
+    else if(/^🟡/.test(l)){ out += '<div class="r-warn">' + inline(l) + '</div>'; }
+    else if(/^🟢/.test(l)){ out += '<div class="r-safe">' + inline(l) + '</div>'; }
+    else if(/^✅/.test(l)){ out += '<div class="r-ok">' + inline(l) + '</div>'; }
+    else if(/^#{1,6}\s+/.test(l)){ out += '<div class="h">' + inline(l.replace(/^#{1,6}\s+/, '')) + '</div>'; }
+    else if(/^[-*]\s+/.test(l)){ out += '<div class="li">' + inline(l.replace(/^[-*]\s+/, '')) + '</div>'; }
+    else if(l === ''){ out += '<div style="height:5px"></div>'; }
+    else { out += '<div>' + inline(l) + '</div>'; }
+    i++;
+  }
   return out;
 }
 
@@ -124,7 +166,14 @@ async function send(){
       while((idx = buf.indexOf('\n\n')) >= 0){
         var evt = buf.slice(0, idx); buf = buf.slice(idx+2);
         var m = evt.match(/^data: (.*)$/m);
-        if(m){ text += m[1]; bot.innerHTML = renderBot(text); msgs.scrollTop = msgs.scrollHeight; }
+        if(m){
+          // 流式重置：后端发现刚才推送的内容其实是"去调工具"的前言（如"好的，我来查一下…"），
+          // 通知这里丢弃已显示内容，等真正的最终答案到达再渲染 —— 避免前言与答案重复出现。
+          if(m[1] === '__DSH_STREAM_RESET__'){ text = ''; bot.innerHTML = '<span class="typing"></span>'; continue; }
+          // 反转义：后端把换行转成了 \n（否则 SSE 分帧会把换行吃掉）
+          var piece = m[1].replace(/\\n|\\\\/g, function(x){ return x === '\\n' ? '\n' : '\\'; });
+          text += piece; bot.innerHTML = renderBot(text); msgs.scrollTop = msgs.scrollHeight;
+        }
       }
     }
     if(!text){ bot.innerHTML = '（没有生成回答）'; }

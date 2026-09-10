@@ -37,6 +37,15 @@ from tools.fill_timesheet_tool import fill_timesheet
 # 专职 Worker 节点名
 WORKER_NAMES = ["policy_agent", "expense_agent", "risk_agent", "fill_agent"]
 
+# 所有 Worker 共用的输出格式约束。
+# 起因：模型喜欢输出 markdown 表格，但聊天气泡较窄，表格在窄容器里会挤成一坨、
+# 甚至出现"表格没有换行"的畸形输出（实测遇到过 |---|---||值| 连在一起的情况）。
+# 统一要求用分点列表，读起来更清楚也更稳。
+FORMAT_RULES = (
+    "\n【输出格式】用简洁的中文分点列表作答（每点一行，以「- 」开头），"
+    "不要使用 markdown 表格。涉及比例/条件对照时，用「- 情形：对应比例」的形式逐条列出。"
+)
+
 # 路由令牌（Supervisor 只输出其中之一，避免依赖结构化输出 / response_format，
 # 因为 deepseek-chat 等模型不支持 response_format 参数）
 ROUTE_TOKENS = ["policy_agent", "expense_agent", "risk_agent", "fill_agent", "__end__"]
@@ -236,25 +245,25 @@ class SupervisorWrapper:
                 "【强制规则】只要用户问题涉及研发费用加计扣除、六大费用口径、高企认定、申报流程、辅助账、留存备查资料等政策内容，"
                 "你必须调用 query_my_documents 工具检索知识库，绝不能跳过。"
                 "当用户问「有哪些知识库/你能查什么」时，用 list_data_sources 工具。"
-                "只基于检索到的上下文作答并引用来源，不编造；知识库没有的就说不知道。",
+                "只基于检索到的上下文作答并引用来源，不编造；知识库没有的就说不知道。" + FORMAT_RULES,
             ),
             "expense_agent": _build_worker(
                 _tools_for("expense_agent", [classify_expense, list_rd_expenses]),
                 "你是研发费用数据归集 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求把费用归类/归集到 8 类口径时，用 classify_expense 工具（需先确定类别、金额、说明）。"
-                "当用户问「列出研发费用条目」时，用 list_rd_expenses。只返回工具结果，不编造金额。",
+                "当用户问「列出研发费用条目」时，用 list_rd_expenses。只返回工具结果，不编造金额。" + FORMAT_RULES,
             ),
             "risk_agent": _build_worker(
                 _tools_for("risk_agent", [scan_rd_risk, list_risk_indicators]),
                 "你是研发费用风险扫描 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户要求扫描/检查研发费用风险时，用 scan_rd_risk 工具。"
-                "当用户问「有哪些风险指标」时，用 list_risk_indicators。",
+                "当用户问「有哪些风险指标」时，用 list_risk_indicators。" + FORMAT_RULES,
             ),
             "fill_agent": _build_worker(
                 _tools_for("fill_agent", [fill_timesheet]),
                 "你是研发工时填报 Worker。任务：仅针对最后一条 user 消息回答。"
                 "当用户描述「某人某天在某项目干了多少小时」时，用 fill_timesheet 工具（需提取：人员、项目、日期、工时、任务）。"
-                "信息不全时先向用户确认缺失字段。",
+                "信息不全时先向用户确认缺失字段。" + FORMAT_RULES,
             ),
         }
 
