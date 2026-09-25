@@ -32,7 +32,7 @@ except ImportError:
         return re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fff]", text.lower())
 
 from config import config
-from hitl import has_approved_query, consume_approved_query, request_approval
+import hitl
 import context
 from cache import cache
 from concurrency import single_flight
@@ -384,28 +384,38 @@ def query_my_documents(question: str, source: str = None) -> str:
         if source is None:
             source = config.DEFAULT_DATA_SOURCE
 
-        # ===== 第一步：HITL 审核（优先） =====
-        sensitive_keywords = ["我的", "个人", "工资", "薪资", "薪酬"]
-        is_sensitive = any(kw in question for kw in sensitive_keywords)
-        logger.info(f"[{context.get_request_id()}] 🔍 is_sensitive = {is_sensitive}")
+        # ===== 第一步：合规复核（优先） =====
+        # 触发条件来自 hitl.needs_review —— 是【业务风险】，不是一堆隐私关键词。
+        # 这里命中的是「个人薪酬明细」这一类：研发费用中的「人员人工费用」
+        # 本身就包含个人薪酬，所以查明细既涉及数据权限、也涉及个人隐私。
+        salary_keywords = ["我的", "个人", "工资", "薪资", "薪酬"]
+        need_review, review_reason = (False, "")
+        if any(kw in question for kw in salary_keywords):
+            need_review, review_reason = hitl.needs_review("salary_detail", {"question": question})
+        logger.info(f"[{context.get_request_id()}] 🔍 需要复核 = {need_review}｜{review_reason}")
 
-        if config.HITL_ENABLED and is_sensitive:
-            if has_approved_query(question, "rag_search"):
-                consume_approved_query(question, "rag_search")
-                logger.info(f"[{context.get_request_id()}] ✅ HITL 已批准")
-                # 批准后继续执行查询（不 return）
+        if config.HITL_ENABLED and need_review:
+            if hitl.has_approved_query(question, "rag_search"):
+                hitl.consume_approved_query(question, "rag_search")
+                logger.info(f"[{context.get_request_id()}] ✅ 本人已有复核记录，放行")
+                # 复核通过后继续执行查询（不 return）
             else:
                 approval_id = f"approval_{uuid.uuid4().hex[:8]}"
-                request_approval(
+                hitl.request_approval(
                     tool_name="rag_search",
                     tool_input=question,
                     user_message=question,
                     context={"source": "rag_tool", "data_source": source},
-                    approval_id=approval_id
+                    approval_id=approval_id,
+                    kind="salary_detail",
+                    reason=review_reason,
                 )
-                logger.info(f"[{context.get_request_id()}] 🔍 HITL 待审核: {approval_id}")
+                logger.info(f"[{context.get_request_id()}] 🔍 待复核: {approval_id}")
                 # ✅ 关键：这里必须 return，停止执行
-                return f"⏳ 此问题涉及个人信息，需要人工审核，审核ID: {approval_id}\n请运行 'python hitl.py' 批准后重新提问。"
+                return (f"⏳ 该问题涉及个人薪酬明细（人员人工费用），需要人工复核。\n"
+                        f"复核 ID：{approval_id}\n"
+                        f"原因：{review_reason}\n"
+                        f"请运行 'python hitl.py' 给出裁定后重新提问。")
 
         # ===== 第二步：判断是否属于政策类问题 =====
         policy_keywords = [

@@ -48,15 +48,24 @@ def test_skill_exposes_capability_manifest():
 # 2. 动态装配
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("worker,expected", [
-    ("policy_agent", 2),
-    ("expense_agent", 2),
-    ("risk_agent", 2),
-    ("fill_agent", 1),
+@pytest.mark.parametrize("worker", [
+    "policy_agent",
+    "expense_agent",
+    "risk_agent",
+    "fill_agent",
 ])
-def test_tools_for_worker(worker, expected):
-    """每个 Worker 按元数据自动装配到正确数量的工具。"""
-    assert len(registry.tools_for_worker(worker)) == expected
+def test_tools_for_worker(worker):
+    """每个 Worker 装配到的工具数，应等于元数据里声明归属它的技能数。
+
+    这里刻意不写死数字（原来写的是 2/2/2/1）——
+    技能库的设计初衷就是「新增能力 = 新增一个目录，主流程零改动」，
+    测试如果把数量写死，每加一个技能都要来改测试，等于把这个设计毁掉。
+    改为「跟技能目录对齐」，新增技能时这个测试自动跟着走。
+    """
+    declared = [s for s in registry.load_skills().values()
+                if s.enabled and s.worker == worker]
+    assert len(declared) >= 1, f"{worker} 一个技能都没有"
+    assert len(registry.tools_for_worker(worker)) == len(declared)
 
 
 def test_tools_for_unknown_worker_is_empty():

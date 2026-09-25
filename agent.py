@@ -172,6 +172,10 @@ async def stream_chat(message: str, session: str = "user001"):
     request_id = f"req_{uuid.uuid4().hex[:8]}"
     context.set_request_id(request_id)
 
+    # ★ 登记「发起人」—— HITL 审批记录会绑定它。
+    #   原实现不绑身份：一个人批准过的敏感问题，另一个人的同类提问会被自动放行（越权）。
+    context.set_requester(session)
+
     # 长期记忆：读取该用户的事实，供 Worker 节点注入（Supervisor 不注入，避免干扰路由）
     memory_prompt = memory_store.build_memory_prompt(session)
     context.set_memory_prompt(memory_prompt)
