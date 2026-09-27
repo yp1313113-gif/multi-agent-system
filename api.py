@@ -123,6 +123,36 @@ async def cost(session: str = None):
         return JSONResponse(status_code=500, content={"detail": f"成本读取失败: {e}"})
 
 
+@app.get("/compression")
+async def compression_stats():
+    """上下文压缩观测：当前配置 + 最近一次压缩报告。
+
+    面试演示点：压缩是「先确定性、再摘要」的两段式 ——
+    第一段（窗口截断 / 大结果落盘 / head-middle-tail）不调模型、不花钱；
+    只有压完仍然超阈值，才调摘要模型。多数请求在第一段就结束了。
+    """
+    try:
+        import compression
+        return compression.stats()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"压缩模块读取失败: {e}"})
+
+
+@app.get("/middleware")
+async def middleware_stats():
+    """中间件链观测：工具边界链的顺序 + 各工具的调用指标。
+
+    面试演示点：Agent 的横切关注点（审批 / 循环守卫 / 重试 / 超时 / 计时 /
+    结果卸载 / 指标）是一条**有序链**，不是散落在各处的装饰器。
+    顺序有语义：重试在外层 → 每次重试都有独立超时。
+    """
+    try:
+        import middleware
+        return middleware.describe()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"中间件链读取失败: {e}"})
+
+
 if __name__ == "__main__":
     # 本地启动入口。此前 api.py 缺少这一段，README 写的 `python api.py` 实际
     # 只会导入模块然后退出（服务器根本没起来）——部署文档里用的是 uvicorn api:app。

@@ -34,6 +34,10 @@ class Config:
         self.TOOL_MAX_RETRIES = int(os.getenv("TOOL_MAX_RETRIES", "2"))
         self.TOOL_RETRY_DELAY = int(os.getenv("TOOL_RETRY_DELAY", "1"))
         
+        # ---- 循环守卫（middleware.LoopGuardMiddleware）----
+        # 同一工具在一次请求内最多被调用几次；超过即拦截（防死循环 / 工具滥用）
+        self.LOOP_GUARD_MAX_TOOL_CALLS = int(os.getenv("LOOP_GUARD_MAX_TOOL_CALLS", "3"))
+
         # ---- 并发控制 ----
         self.MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "10"))
         self.CONCURRENCY_QUEUE_TIMEOUT = float(os.getenv("CONCURRENCY_QUEUE_TIMEOUT", "5"))
@@ -52,6 +56,22 @@ class Config:
         # ---- 服务预热（启动时预加载模型，避免首个请求承担冷启动成本）----
         self.WARMUP_ENABLED = os.getenv("WARMUP_ENABLED", "true").lower() == "true"
         
+        # ---- 上下文压缩（compression.py）----
+        # 设计：先做「确定性压缩」（不调模型、不花钱），重新计量后仍超阈值才调摘要模型。
+        self.COMPRESSION_ENABLED = os.getenv("COMPRESSION_ENABLED", "true").lower() == "true"
+        # 压力阈值（token，近似估算）：请求估算超过它才触发压缩
+        self.CONTEXT_PRESSURE_TOKENS = int(os.getenv("CONTEXT_PRESSURE_TOKENS", "6000"))
+        # 单个工具结果超过这个 token 数就落盘，请求里只留「路径 + 哈希 + 预览」
+        self.SUMMARY_TOOL_RESULT_TOKEN_LIMIT = int(os.getenv("SUMMARY_TOOL_RESULT_TOKEN_LIMIT", "800"))
+        # 落盘后请求里保留的预览 token 数
+        self.TOOL_RESULT_PREVIEW_TOKENS = int(os.getenv("TOOL_RESULT_PREVIEW_TOKENS", "200"))
+        # 摘要压缩时保留最近多少条消息原文（更早的才被摘要）
+        self.SUMMARY_KEEP_MESSAGES = int(os.getenv("SUMMARY_KEEP_MESSAGES", "6"))
+        # Supervisor 路由请求视图保留的消息条数（窗口截断，零成本）
+        self.ROUTE_CONTEXT_WINDOW = int(os.getenv("ROUTE_CONTEXT_WINDOW", "12"))
+        # 检索上下文拼装的字符预算（compression.fit_context 使用）
+        self.RAG_CONTEXT_MAX_CHARS = int(os.getenv("RAG_CONTEXT_MAX_CHARS", "4000"))
+
         # ---- Token 成本（元 / 百万 token；未配置则只统计 token 不算钱）----
         self.PRICE_INPUT_PER_M = float(os.getenv("PRICE_INPUT_PER_M", "0"))
         self.PRICE_OUTPUT_PER_M = float(os.getenv("PRICE_OUTPUT_PER_M", "0"))

@@ -28,6 +28,7 @@ from langgraph.types import Command
 from config import config
 import context
 from harness import guarded_tool
+import middleware
 from tools.list_sources_tool import list_data_sources
 from tools.rag_tool import query_my_documents
 from tools.expense_tool import classify_expense, list_rd_expenses
@@ -243,6 +244,12 @@ def _build_worker(tools, system_prompt: str):
     return create_agent(model=_make_llm(), tools=tools, system_prompt=system_prompt)
 
 
+# ★ 模型边界中间件链。
+#   顺序：压缩(10) → 记忆注入(20) → 黑板注入(30)，见 middleware.build_model_chain。
+#   `_format_board` 是业务格式，所以由编排层注入给中间件 —— 中间件层不持有业务知识。
+MODEL_CHAIN = middleware.build_model_chain(board_formatter=_format_board)
+
+
 async def _supervisor(state: RDState) -> Command[
     Literal["policy_agent", "expense_agent", "risk_agent", "fill_agent", "__end__"]
 ]:
@@ -260,7 +267,15 @@ async def _supervisor(state: RDState) -> Command[
 
     # 首次路由：使用纯文本输出 + 解析路由令牌（deepseek-chat 不支持 response_format/结构化输出）
     router = _make_llm()
-    resp = await router.ainvoke([SystemMessage(content=ROUTER_SYSTEM)] + state["messages"])
+
+    # ★ 走模型边界中间件链（当前只有压缩在 supervisor scope 生效）。
+    #   压的是**发给路由模型的请求视图**，State 里的原始 messages 一条不动 ——
+    #   用户翻历史看到的仍然完整，压缩只影响这一次模型调用看到的内容。
+    req = MODEL_CHAIN.build(state["messages"], node="supervisor", scope="supervisor", state=state)
+    if req.notes:
+        logger.info(f"[middleware] 路由请求链: {req.notes}")
+
+    resp = await router.ainvoke([SystemMessage(content=ROUTER_SYSTEM)] + list(req.messages))
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
     target = None
     for token in ROUTE_TOKENS:
@@ -291,27 +306,17 @@ def _make_worker_node(agent, name: str):
             if getattr(m, "type", "") == "human":
                 last_human = m
                 break
-        # 长期记忆注入：把「关于该用户的事实」作为前缀拼进本轮用户消息。
-        # 注意只注入到 Worker，不注入 Supervisor —— 路由只依据用户原话，
-        # 记忆里的词（如"偏好"/"项目"）会干扰令牌匹配，把路由带偏。
-        memory = context.get_memory_prompt()
-        if last_human is not None and memory:
-            from langchain_core.messages import HumanMessage
-            last_human = HumanMessage(
-                content=f"{memory}\n\n{getattr(last_human, 'content', '')}"
-            )
-            logger.info(f"[memory] 已向 {name} 注入长期记忆（{len(memory)} 字符）")
-        # ★ 业务黑板注入：把「本会话已产生的业务数据」拼进 Worker 的输入。
-        # 旧实现只传最后一句用户消息 —— 工时/归集/风险之间没有任何数据流。
-        board_text = _format_board(state)
-        if last_human is not None and board_text:
-            from langchain_core.messages import HumanMessage
-            last_human = HumanMessage(
-                content=f"{getattr(last_human, 'content', '')}\n\n{board_text}"
-            )
-            logger.info(f"[board] 已向 {name} 注入业务数据摘要（{len(board_text)} 字符）")
-
-        filtered_state = {"messages": [last_human]} if last_human else state
+        # ★ 走模型边界中间件链：记忆注入(20) → 黑板注入(30)。
+        #   两者都只对 worker scope 生效 —— 路由**不注入记忆**，
+        #   因为记忆里的词（「偏好」「项目」）会干扰路由令牌匹配。
+        #   旧实现把这两段注入逻辑写死在这里；现在顺序由链定义，编排层不再关心。
+        req = MODEL_CHAIN.build(
+            [last_human] if last_human is not None else [],
+            node=name, scope="worker", state=state,
+        )
+        if req.notes:
+            logger.info(f"[middleware] {name} 请求链: {req.notes}")
+        filtered_state = {"messages": req.messages} if req.messages else state
 
         # ★ 开一块黑板草稿：本 Worker 的工具往里写，节点结束后整块收口到 State
         token = context.new_board()

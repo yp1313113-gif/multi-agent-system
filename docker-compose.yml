@@ -8,9 +8,17 @@ services:
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
       - TEMPERATURE=${TEMPERATURE:-0}
       - RECURSION_LIMIT=${RECURSION_LIMIT:-10}
+      - LOOP_GUARD_MAX_TOOL_CALLS=${LOOP_GUARD_MAX_TOOL_CALLS:-3}
       - TOOL_TIMEOUT=${TOOL_TIMEOUT:-10}
       - TOOL_MAX_RETRIES=${TOOL_MAX_RETRIES:-3}
       - TOOL_RETRY_DELAY=${TOOL_RETRY_DELAY:-1}
+      - COMPRESSION_ENABLED=${COMPRESSION_ENABLED:-true}
+      - CONTEXT_PRESSURE_TOKENS=${CONTEXT_PRESSURE_TOKENS:-6000}
+      - SUMMARY_TOOL_RESULT_TOKEN_LIMIT=${SUMMARY_TOOL_RESULT_TOKEN_LIMIT:-800}
+      - TOOL_RESULT_PREVIEW_TOKENS=${TOOL_RESULT_PREVIEW_TOKENS:-200}
+      - SUMMARY_KEEP_MESSAGES=${SUMMARY_KEEP_MESSAGES:-6}
+      - ROUTE_CONTEXT_WINDOW=${ROUTE_CONTEXT_WINDOW:-12}
+      - RAG_CONTEXT_MAX_CHARS=${RAG_CONTEXT_MAX_CHARS:-4000}
       - CACHE_ENABLED=${CACHE_ENABLED:-true}
       - CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-100}
       - HITL_ENABLED=${HITL_ENABLED:-true}
@@ -24,6 +32,7 @@ services:
       - ./chroma_db:/app/chroma_db
       - ./models:/app/models
       - ./logs:/app/logs
+      - ./outputs:/app/outputs   # 上下文压缩卸载的大工具结果 / 历史原文
       - ./hf_cache:/root/.cache/huggingface   # HuggingFace 模型缓存（避免重复下载）
     stdin_open: true
     tty: true

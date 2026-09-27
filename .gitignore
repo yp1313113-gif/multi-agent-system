@@ -3,6 +3,7 @@ __pycache__/
 chroma_db/
 models/
 logs/
+outputs/
 checkpoints.db
 approval.db
 *.db

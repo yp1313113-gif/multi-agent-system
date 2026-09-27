@@ -30,6 +30,7 @@ import uuid
 from loguru import logger
 
 from supervisor import create_supervisor, WORKER_NAMES, _make_llm
+from middleware import new_loop_guard, reset_loop_guard
 from config import config
 import context
 import memory_store
@@ -176,6 +177,15 @@ async def stream_chat(message: str, session: str = "user001"):
     #   原实现不绑身份：一个人批准过的敏感问题，另一个人的同类提问会被自动放行（越权）。
     context.set_requester(session)
 
+    # ★ 循环守卫：按请求隔离（contextvars），限制同一工具在一次请求内的调用次数。
+    #   这是「防死循环双保险」的另一半 —— 另一半是 LangGraph 的 recursion_limit。
+    #   历史上 AgentLoopGuard 只被测试实例化过，生产路径从没接上；现在由
+    #   LoopGuardMiddleware 挂进工具调用链，真正生效。
+    guard_token = new_loop_guard(
+        max_turns=max(4, int(config.RECURSION_LIMIT)),
+        max_tool_calls=int(getattr(config, "LOOP_GUARD_MAX_TOOL_CALLS", 3)),
+    )
+
     # 长期记忆：读取该用户的事实，供 Worker 节点注入（Supervisor 不注入，避免干扰路由）
     memory_prompt = memory_store.build_memory_prompt(session)
     context.set_memory_prompt(memory_prompt)
@@ -319,4 +329,7 @@ async def stream_chat(message: str, session: str = "user001"):
     except Exception as e:
         logger.warning(f"[stream] 长期记忆抽取跳过: {e}")
 
-    logger.info(f"[stream] 完成 request_id={request_id} 输出 {emitted_chars} 字符")
+    reset_loop_guard(guard_token)
+    logger.info(
+        f"[stream] 完成 request_id={request_id} 输出 {emitted_chars} 字符"
+    )

@@ -34,8 +34,36 @@ except ImportError:
 from config import config
 import hitl
 import context
+import middleware
 from cache import cache
 from concurrency import single_flight
+
+# ============================================================
+# 合规复核守卫（注册表模式）
+# ============================================================
+# 「查个人薪酬明细要不要人工复核」是**纯横切**判断 —— 只看入参，不依赖工具内部
+# 算出来的任何中间结果。所以它适合搬到中间件链上，由 ApprovalMiddleware
+# 在**正确的时机强制执行**，而不是写在工具体里靠人记得。
+#
+# 对比：tools/expense_tool.py 的复核判定依赖「规则库有没有命中」这个中间结果，
+# 那是业务逻辑，刻意留在工具里。
+_SALARY_KEYWORDS = ["我的", "个人", "工资", "薪资", "薪酬"]
+
+
+def _rag_approval_guard(args, kwargs) -> "middleware.ApprovalRequest":
+    question = str(args[0]) if args else str(kwargs.get("question", "") or "")
+    if not any(kw in question for kw in _SALARY_KEYWORDS):
+        return middleware.ApprovalRequest(need=False)
+    need, reason = hitl.needs_review("salary_detail", {"question": question})
+    # record_name 保持 "rag_search"：兼容既有审批记录（工具名是 query_my_documents）
+    return middleware.ApprovalRequest(
+        need=need, kind="salary_detail",
+        reason=reason or "个人薪酬明细（人员人工费用）",
+        key=question, record_name="rag_search",
+    )
+
+
+middleware.APPROVAL.register_guard("query_my_documents", _rag_approval_guard)
 
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(_current_dir)
@@ -103,8 +131,8 @@ rag_prompt = ChatPromptTemplate.from_template("""
 用户问题：{input}
 """)
 
-def format_docs(docs, max_chars: int = 4000):
-    """拼装检索上下文，做 token 预算截断（避免超长上下文撑爆窗口）。"""
+def _format_docs_basic(docs, max_chars: int):
+    """基础版：累加到超预算就停（compression 不可用时的回退路径）。"""
     if not docs:
         return "无相关上下文"
     parts = []
@@ -119,6 +147,32 @@ def format_docs(docs, max_chars: int = 4000):
         parts.append(content)
         total += len(content)
     return "\n\n".join(parts)
+
+
+def format_docs(docs, max_chars: int = None):
+    """拼装检索上下文，做 token 预算截断（避免超长上下文撑爆窗口）。
+
+    预算值来自 config.RAG_CONTEXT_MAX_CHARS（默认 4000 字符），不再硬编码。
+
+    实现委托给 compression.fit_context —— 相比「累加到超预算就整篇丢弃」，
+    它多做一步：**单篇文档自身就超过预算份额时做 head+middle+tail**，
+    而不是直接截断。这在「只召回了一篇超长文档」的场景下差别很大：
+    后者会让模型拿到半句话，前者至少保留了开头、中段和结尾结论。
+    """
+    if not docs:
+        return "无相关上下文"
+    try:
+        import compression
+        text, report = compression.fit_context(docs, max_chars)
+        if report.compacted:
+            logger.info(
+                f"[{context.get_request_id()}] 🗜 检索上下文压缩："
+                f"{len(docs)} 篇 → {len(text)} 字符（{report.compacted} 篇做过 head/middle/tail）"
+            )
+        return text
+    except Exception as e:
+        logger.warning(f"[compression] fit_context 失败，回退基础截断: {e}")
+        return _format_docs_basic(docs, max_chars or 4000)
 
 _rag_chain = None
 
@@ -384,40 +438,15 @@ def query_my_documents(question: str, source: str = None) -> str:
         if source is None:
             source = config.DEFAULT_DATA_SOURCE
 
-        # ===== 第一步：合规复核（优先） =====
-        # 触发条件来自 hitl.needs_review —— 是【业务风险】，不是一堆隐私关键词。
-        # 这里命中的是「个人薪酬明细」这一类：研发费用中的「人员人工费用」
-        # 本身就包含个人薪酬，所以查明细既涉及数据权限、也涉及个人隐私。
-        salary_keywords = ["我的", "个人", "工资", "薪资", "薪酬"]
-        need_review, review_reason = (False, "")
-        if any(kw in question for kw in salary_keywords):
-            need_review, review_reason = hitl.needs_review("salary_detail", {"question": question})
-        logger.info(f"[{context.get_request_id()}] 🔍 需要复核 = {need_review}｜{review_reason}")
+        # ===== 合规复核已上移到中间件链 =====
+        # 原来这段内联在工具体里（检查 → 查已批准 → 消费或挂起）。
+        # 现在由 middleware.ApprovalMiddleware 在执行本工具**之前**完成，
+        # 规则见文件顶部的 _rag_approval_guard。
+        # 好处：强制执行不依赖开发者记得在工具里写一遍；顺序和时机由链统一定义。
+        #   ⚠️ 拦截时工具体根本不会执行，所以这里不需要（也不能）再判一次 ——
+        #      否则会出现「中间件消费了批准记录 → 工具里又判一次 → 重复挂起」。
 
-        if config.HITL_ENABLED and need_review:
-            if hitl.has_approved_query(question, "rag_search"):
-                hitl.consume_approved_query(question, "rag_search")
-                logger.info(f"[{context.get_request_id()}] ✅ 本人已有复核记录，放行")
-                # 复核通过后继续执行查询（不 return）
-            else:
-                approval_id = f"approval_{uuid.uuid4().hex[:8]}"
-                hitl.request_approval(
-                    tool_name="rag_search",
-                    tool_input=question,
-                    user_message=question,
-                    context={"source": "rag_tool", "data_source": source},
-                    approval_id=approval_id,
-                    kind="salary_detail",
-                    reason=review_reason,
-                )
-                logger.info(f"[{context.get_request_id()}] 🔍 待复核: {approval_id}")
-                # ✅ 关键：这里必须 return，停止执行
-                return (f"⏳ 该问题涉及个人薪酬明细（人员人工费用），需要人工复核。\n"
-                        f"复核 ID：{approval_id}\n"
-                        f"原因：{review_reason}\n"
-                        f"请运行 'python hitl.py' 给出裁定后重新提问。")
-
-        # ===== 第二步：判断是否属于政策类问题 =====
+        # ===== 判断是否属于政策类问题 =====
         policy_keywords = [
             "加计扣除", "高企", "高新技术企业", "口径", "费用", "归集", "辅助账",
             "备查", "申报", "研发活动", "研发人员", "研发费用", "委托研发", "摊销", "折旧",
