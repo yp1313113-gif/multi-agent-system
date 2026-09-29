@@ -33,7 +33,40 @@ jobs:
         env:
           MODEL_TESTS: "0"
         run: |
-          pytest -q tests/
+          set -o pipefail
+          pytest -q tests/ --tb=short -rf 2>&1 | tee /tmp/pytest.log
+          echo "PYTEST_EXIT=$?" >> /tmp/pytest.log
+
+      # 失败时把关键信息写进 Job Summary（无需登录即可通过 API 读取）
+      - name: Dump failure detail to summary
+        if: failure()
+        run: |
+          {
+            echo "## ❌ pytest 失败详情"
+            echo ""
+            echo "### 已安装的关键包"
+            echo '\`\`\`'
+            pip list 2>/dev/null | grep -iE "langchain|langgraph|aiosqlite|mcp|chromadb|sentence|pytest|anyio" || echo "(无匹配)"
+            echo '\`\`\`'
+            echo ""
+            echo "### 收集阶段自检"
+            echo '\`\`\`'
+            python -c "
+import importlib
+mods = ['aiosqlite','mcp','langchain_text_splitters','langchain_chroma','langchain_huggingface','langchain_core','langgraph','pytest']
+for m in mods:
+    try:
+        importlib.import_module(m); print(f'OK   {m}')
+    except Exception as e:
+        print(f'FAIL {m}: {type(e).__name__}: {e}')
+" 2>&1 || true
+            echo '\`\`\`'
+            echo ""
+            echo "### pytest 输出（末 120 行）"
+            echo '\`\`\`'
+            tail -120 /tmp/pytest.log 2>/dev/null || echo "(无日志)"
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build vector store (可选门控)
         if: false   # 默认不跑（需模型权重）；本地/自托管 runner 可开启
