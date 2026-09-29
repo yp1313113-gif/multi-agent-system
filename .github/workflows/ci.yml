@@ -24,16 +24,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Compile check (所有模块语法)
+      - name: Compile check
         run: |
           python -m py_compile $(find . -name "*.py" -not -path "./.git/*")
 
-      - name: Run tests (跳过需模型的用例)
+      - name: Run tests
         env:
           MODEL_TESTS: "0"
         run: |
-          pytest -q tests/ --tb=short
-
-      - name: Build vector store (可选门控)
-        if: false
-        run: python ingest.py
+          set +e
+          pytest -q tests/ --tb=short > /tmp/pytest.log 2>&1
+          CODE=$?
+          if [ $CODE -ne 0 ]; then
+            echo "--- pytest failed with exit $CODE ---"
+            sed -n '1,60p' /tmp/pytest.log | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error title=pytest-output::$line"
+            done
+          fi
+          cat /tmp/pytest.log
+          exit $CODE
