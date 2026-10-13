@@ -1,6 +1,6 @@
 """并发控制模块测试：AsyncLimiter 限流 + SyncSingleFlight 防击穿。
 
-覆盖语义（面试可讲）：
+覆盖语义（关键路径）：
   1) 并发上限强制：同时运行的任务数不超过 max_concurrency；
   2) 排队超时拒绝：并发满且排队超时 → acquire 返回 False（API 层转 503）；
   3) 同一 key 并发 miss 只重建一次（single-flight），其余共享结果；

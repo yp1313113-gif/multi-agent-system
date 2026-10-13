@@ -78,7 +78,7 @@ class SyncSingleFlight:
         self._guard = threading.Lock()
         self.rebuild_wait = rebuild_wait
         self.max_wait = max_wait
-        self._rebuilt_count = 0       # 统计实际重建次数（压测/面试用）
+        self._rebuilt_count = 0       # 统计实际重建次数（压测用）
         self._waited_count = 0        # 统计被共享结果的等待次数
 
     def run(self, key: str, rebuild, read_back):

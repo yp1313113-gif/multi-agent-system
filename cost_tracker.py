@@ -122,7 +122,7 @@ def session_summary(session_id: str) -> dict:
 
 
 def global_summary() -> dict:
-    """全局汇总（运维/面试演示用）。"""
+    """全局汇总（运维/演示用）。"""
     if not os.path.exists(DB_PATH):
         return {"calls": 0, "total_tokens": 0, "cost": 0.0, "sessions": 0}
     conn = _init_db()

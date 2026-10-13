@@ -96,7 +96,7 @@ class Cache:
 
     @property
     def backend(self) -> str:
-        """当前生效的缓存后端（可观测/面试演示用）。"""
+        """当前生效的缓存后端（可观测/演示用）。"""
         return "redis" if self.enabled else "local-lru"
 
     def get(self, key):
