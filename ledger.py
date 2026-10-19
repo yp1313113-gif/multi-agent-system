@@ -71,7 +71,15 @@ def build_ledger(expenses: list, allocations: dict | None = None,
                                               for c in CATEGORIES}
     unknown: list = []
 
+    skipped_pending: list = []
+
     for e in expenses or []:
+        # ★ 待复核的费用先不计入辅助账。
+        #   裁定通过之前，它还只是「可能属于研发费用」，写进辅助账就等于提前认定，
+        #   算出来的加计扣除会虚高。原实现漏了这一步。
+        if e.get("pending"):
+            skipped_pending.append(e)
+            continue
         cat = e.get("category", "")
         amt = float(e.get("amount", 0) or 0)
         if cat in by_category:
@@ -94,6 +102,7 @@ def build_ledger(expenses: list, allocations: dict | None = None,
         "total": total,
         "allocations": allocations,
         "unknown_category": unknown,
+        "skipped_pending": skipped_pending,
     }
 
 
@@ -181,12 +190,17 @@ def render_markdown(ledger: dict, summary: dict, checklist: list) -> str:
         f"- 结论：{conclusion}",
         "",
     ]
-    if summary.get("allocations"):
-        lines += ["## 三、人员人工费用按工时占比分摊", "",
-                  "| 研发项目 | 分摊金额（元） |", "|---|---:|"]
-        for proj, amt in summary["allocations"].items():
+    # 第三节无条件输出：条件渲染会导致整节消失、编号从「二」直接跳到「四」，
+    # 打印出来会让人以为文档缺页。
+    lines += ["## 三、人员人工费用按工时占比分摊", ""]
+    _alloc = summary.get("allocations") or {}
+    if _alloc:
+        lines += ["| 研发项目 | 分摊金额（元） |", "|---|---:|"]
+        for proj, amt in _alloc.items():
             lines.append(f"| {proj} | {float(amt):,.2f} |")
-        lines.append("")
+    else:
+        lines.append("本期未涉及跨项目分摊（或没有工时记录支撑）。")
+    lines.append("")
 
     lines += ["## 四、留存备查资料清单", "", "| # | 资料 | 状态 |", "|---:|---|---|"]
     for c in checklist:
@@ -227,7 +241,14 @@ def generate_rd_ledger(period: str = "") -> str:
     context.board_set("ledger", sm)
     context.board_set("evidence", ck)
 
-    return render_markdown(lg, sm, ck)
+    text = render_markdown(lg, sm, ck)
+    skipped = lg.get("skipped_pending") or []
+    if skipped:
+        amt = sum(float(x.get("amount", 0) or 0) for x in skipped)
+        text += (f"\n\n> 注意：还有 {len(skipped)} 笔费用（合计 ¥{amt:,.0f}）"
+                 f"正在等待人工复核，尚未计入本辅助账。\n"
+                 f"> 裁定通过后重新生成即可计入。\n")
+    return text
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 """
 from langchain.tools import tool
 
+import bridge
 import context
 import hitl
 import rules
@@ -43,13 +44,13 @@ def _allocate_by_timesheet(total: float) -> dict:
 @tool
 def classify_expense(category: str, amount: float, description: str,
                      confidence: float = 1.0) -> str:
-    """把一笔费用归类到 8 类研发费用口径之一，返回归集结果。
+    """把一笔费用归类到六类研发费用口径之一，返回归集结果。
 
     归集前会先查规则库：命中则按规则自动归类（不再问人）；
     没命中且触发复核条件时，写进待复核队列。
 
     Args:
-        category: 费用类别（8 类口径之一）
+        category: 费用类别（六类口径之一）
         amount: 金额（元）
         description: 费用说明
         confidence: 本次归类的置信度 0~1；不确定时传低值会触发人工复核
@@ -76,27 +77,10 @@ def classify_expense(category: str, amount: float, description: str,
         need, reason = hitl.needs_review(
             "expense_classify", {"amount": amount, "confidence": confidence})
 
-    # ★ 第三步：写业务黑板 + 记一笔归集日志（供自动归类率指标用）
-    context.board_append("expenses", {
-        "category": category,
-        "amount": float(amount),
-        "description": description,
-        "auto": auto,
-    })
-    rules.log_classification(description, category, amount, auto=auto, rule_id=rule_id)
-
-    extra = ""
-    if category == "人员人工费用":
-        alloc = _allocate_by_timesheet(float(amount))
-        if alloc:
-            context.board_set("allocations", alloc)
-            detail = "；".join(f"{k} ¥{v:,.0f}" for k, v in alloc.items())
-            extra = f"\n  · 已按工时占比分摊到各项目：{detail}"
-
-    if auto:
-        return (f"✅ 自动归集（命中规则 {rule_id}）：{description} → {category}，"
-                f"金额 ¥{amount:,.0f}。\n  · 依据：{rule.get('rationale') or '人工历史裁定'}{extra}")
-
+    # ★ 第三步：需要复核的，先登记（拿到 approval_id），再写黑板
+    #   原实现是先写 expenses 再登记，导致待复核的费用被提前计入合计，
+    #   算出来的加计扣除虚高。现在带 pending 标记，下游只统计已裁定的。
+    aid = None
     if need:
         aid = hitl.request_approval(
             tool_name="classify_expense",
@@ -108,11 +92,41 @@ def classify_expense(category: str, amount: float, description: str,
         )
         context.board_append("pending", {"id": aid, "description": description,
                                          "suggested": category, "reason": reason})
+
+    # ★ 第四步：写业务黑板 + 记一笔归集日志（供自动归类率指标用）
+    context.board_append("expenses", {
+        "category": category,
+        "amount": float(amount),
+        "description": description,
+        "auto": auto,
+        "pending": bool(need),
+        "approval_id": aid,
+    })
+    rules.log_classification(description, category, amount, auto=auto, rule_id=rule_id)
+
+    # ★ 演示桥接：同步一份到看板数据文件，切到看板能看到这笔
+    synced = bridge.append_expense(category, amount, description, confidence)
+
+    extra = ""
+    if category == "人员人工费用":
+        alloc = _allocate_by_timesheet(float(amount))
+        if alloc:
+            context.board_set("allocations", alloc)
+            detail = "；".join(f"{k} ¥{v:,.0f}" for k, v in alloc.items())
+            extra = f"\n  · 已按工时占比分摊到各项目：{detail}"
+
+    tail = "（已同步到业务看板）" if synced else ""
+
+    if auto:
+        return (f"✅ 自动归集（命中规则 {rule_id}）：{description} → {category}，"
+                f"金额 ¥{amount:,.0f}。\n  · 依据：{rule.get('rationale') or '人工历史裁定'}{extra}{tail}")
+
+    if need:
         return (f"⏳ 已暂存待复核：{description} → 建议归入「{category}」，金额 ¥{amount:,.0f}。\n"
                 f"  · 复核 ID：{aid}\n  · 原因：{reason}\n"
                 f"  · 请运行 'python hitl.py' 给出裁定（裁定后自动沉淀为规则）{extra}")
 
-    return f"✅ 已归集：{description} → {category}，金额 ¥{amount:,.0f}。{extra}"
+    return f"✅ 已归集：{description} → {category}，金额 ¥{amount:,.0f}。{extra}{tail}"
 
 
 @tool

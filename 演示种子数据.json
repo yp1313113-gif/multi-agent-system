@@ -1,0 +1,91 @@
+{
+ "tax_rate": 0.25,
+ "deduct_rate": 1,
+ "total_labor_cost": 50000,
+ "timesheets": [
+  {
+   "employee": "小王",
+   "project": "智能客服项目",
+   "date": "2026-10-18",
+   "hours": 6,
+   "task": "模型参数调优"
+  },
+  {
+   "employee": "小王",
+   "project": "智能客服项目",
+   "date": "2026-10-19",
+   "hours": 2,
+   "task": "接口联调"
+  },
+  {
+   "employee": "小李",
+   "project": "智能客服项目",
+   "date": "2026-10-18",
+   "hours": 2,
+   "task": "数据标注"
+  },
+  {
+   "employee": "小李",
+   "project": "知识库项目",
+   "date": "2026-10-19",
+   "hours": 4,
+   "task": "检索评测"
+  }
+ ],
+ "expenses": [
+  {
+   "category": "人员人工费用",
+   "amount": 32000,
+   "description": "9 月研发人员工资",
+   "confidence": 0.95,
+   "project": "智能客服项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1001"
+  },
+  {
+   "category": "直接投入费用",
+   "amount": 8600,
+   "description": "检测服务费",
+   "confidence": 0.95,
+   "project": "智能客服项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1002"
+  },
+  {
+   "category": "折旧费用",
+   "amount": 5000,
+   "description": "实验设备折旧",
+   "confidence": 0.95,
+   "project": "智能客服项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1003"
+  },
+  {
+   "category": "其他相关费用",
+   "amount": 3000,
+   "description": "研发人员出差差旅费",
+   "confidence": 0.95,
+   "project": "智能客服项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1004"
+  },
+  {
+   "category": "直接投入费用",
+   "amount": 150000,
+   "description": "大额项目外包费",
+   "confidence": 0.95,
+   "project": "智能客服项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1005"
+  },
+  {
+   "category": "其他相关费用",
+   "amount": 8000,
+   "description": "专家咨询费",
+   "confidence": 0.5,
+   "project": "知识库项目",
+   "date": "2026-10-31",
+   "voucher": "JZ-1006"
+  }
+ ]
+}

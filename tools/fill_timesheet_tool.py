@@ -5,6 +5,7 @@
 """
 from langchain.tools import tool
 
+import bridge
 import context
 
 
@@ -34,4 +35,10 @@ def fill_timesheet(employee: str, project: str, work_date: str, hours: float, ta
         "task": task_desc,
     })
 
-    return f"✅ 工时单已生成：{employee} 于 {work_date} 在「{project}」填报 {hours}h，任务：{task_desc}。"
+    # ★ 演示桥接：同时同步一份到看板数据文件，这样在聊天里填的工时
+    #   切到看板页就能看到。失败不影响业务（bridge 内部吞掉异常）。
+    synced = bridge.append_timesheet(employee, project, work_date, hours, task_desc)
+
+    tail = "（已同步到业务看板）" if synced else ""
+    return (f"✅ 工时单已生成：{employee} 于 {work_date} 在「{project}」"
+            f"填报 {hours}h，任务：{task_desc}。{tail}")

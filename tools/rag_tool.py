@@ -420,7 +420,12 @@ def _cached_rag_query(question, source):
     # 防击穿：同一 key 并发 miss 时只重建一次，其余请求等待共享结果
     return single_flight.run(cache_key, rebuild, lambda: cache.get(cache_key))
 
-print("✅ rag_tool 模块正在被加载...")
+# Windows 默认 GBK 控制台无法输出 emoji，模块导入期直接 print 会让服务起不来。
+# 这里降级处理：能输出就输出，不能就退回 ASCII。
+try:
+    print("✅ rag_tool 模块正在被加载...")
+except Exception:
+    print("[OK] rag_tool module loading...")
 
 @tool
 def query_my_documents(question: str, source: str = None) -> str:
@@ -428,9 +433,14 @@ def query_my_documents(question: str, source: str = None) -> str:
     查询研发费用政策、制度、流程。
     当用户询问关于加计扣除、高企认定、费用口径、辅助账、留存备查等政策时使用此工具。
     """
-    print("\n" + "=" * 50)
-    print("🔥 query_my_documents 被调用了！")
-    print("=" * 50 + "\n")
+    try:
+        print("\n" + "=" * 50)
+        print("🔥 query_my_documents 被调用了！")
+        print("=" * 50 + "\n")
+    except Exception:
+        print("\n" + "=" * 50)
+        print("[CALL] query_my_documents invoked")
+        print("=" * 50 + "\n")
 
     try:
         logger.info(f"[{context.get_request_id()}] 🔍 HITL_ENABLED = {config.HITL_ENABLED}")

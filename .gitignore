@@ -17,3 +17,11 @@ test_retrieval.py
 checkpoints.db*
 *.db-shm
 *.db-wal
+# 运行时产物（每次跑都会变，不进仓库）
+用户输入数据.json
+看板状态.json
+演示输出_*.txt
+_*.csv
+_*.xlsx
+_*.py
+_*.png
