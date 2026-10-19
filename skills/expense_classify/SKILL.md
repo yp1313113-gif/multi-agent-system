@@ -3,7 +3,7 @@ name: expense_classify
 version: 1.1.0
 worker: expense_agent
 handler: tools.expense_tool:classify_expense
-description: 把一笔费用归类到 8 类研发费用口径之一（人员人工/直接投入/折旧/无形资产摊销/新产品设计费/装配调试/其他相关费用/委托研发）
+description: 把一笔费用归类到 六类研发费用口径之一（人员人工/直接投入/折旧/无形资产摊销/新产品设计费/其他相关费用；委托研发单独处理）
 when_to_use: 用户要求把某笔费用归类 / 归集到研发费用口径时
 enabled: true
 ---

@@ -91,7 +91,7 @@ hitl.consume_approved_query(question, "rag_search")
 
 规则表带 `hit_count`，可以看出这条规则是否真的在起作用。
 
-`CATEGORIES`（8 类研发费用口径）在 `rules.py` 里定义，是**单一事实来源**，
+`CATEGORIES`（六类研发费用口径）在 `rules.py` 里定义，是**单一事实来源**，
 `tools/expense_tool.py` 从它引入 —— 避免口径在两处漂移。
 
 ---

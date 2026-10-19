@@ -20,7 +20,7 @@ mcp = FastMCP(
 
 @mcp.tool()
 def classify_expense_tool(category: str, amount: float, description: str) -> str:
-    """把一笔费用归类到 8 类研发费用口径之一，返回归集结果。"""
+    """把一笔费用归类到 六类研发费用口径之一，返回归集结果。"""
     return classify_expense.invoke({"category": category, "amount": amount, "description": description})
 
 

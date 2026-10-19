@@ -1,4 +1,4 @@
-"""研发费用数据归集工具：把费用条目归集到 8 类研发费用口径（模拟 ERP 数据）。
+"""研发费用数据归集工具：把费用条目归集到 六类研发费用口径（模拟 ERP 数据）。
 
 [黑板] 归集结果写进 State；
       其中「人员人工费用」还要按工时占比分摊到各研发项目 ——
@@ -12,7 +12,7 @@ import context
 import hitl
 import rules
 
-# 8 类口径的单一事实来源在 rules.CATEGORIES（规则库要用它校验裁定是否合法）
+# 六类口径的单一事实来源在 rules.CATEGORIES（规则库要用它校验裁定是否合法）
 _CATEGORIES = rules.CATEGORIES
 
 _MOCK_EXPENSES = [
